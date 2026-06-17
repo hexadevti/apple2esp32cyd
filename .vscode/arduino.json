@@ -1,0 +1,19 @@
+{
+  "port": "COM4",
+  "board": "esp32:esp32:esp32",
+  "programmer": "esptool",
+  "sketch": "apple2esp32cyd.ino",
+  "output": "build",
+  "monitorPortSettings": {
+    "port": "COM4",
+    "baudRate": 115200,
+    "lineEnding": "\r\n",
+    "dataBits": 8,
+    "parity": "none",
+    "stopBits": "one"
+  },
+  "optimize_for_debug": false,
+  "configurationRequired": true,
+  "useProgrammer": false,
+  "configuration": "PSRAM=disabled,PartitionScheme=default,CPUFreq=240,FlashMode=qio,FlashFreq=80,FlashSize=4M,UploadSpeed=921600,LoopCore=1,EventsCore=1,DebugLevel=none"
+}

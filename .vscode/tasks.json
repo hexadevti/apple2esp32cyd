@@ -1,0 +1,56 @@
+{
+  // Build / upload tasks for arduino-cli.
+  //
+  // Target: plain ESP32 (TFT build) on COM4 — matches the connected device.
+  // To retarget, edit the --fqbn value and the -p port in BOTH tasks below.
+  //
+  // Run with: Terminal > Run Task…  (Build is the default build task: Ctrl+Shift+B)
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Arduino: Build",
+      "type": "shell",
+      "command": "arduino-cli",
+      "args": [
+        "compile",
+        "--fqbn",
+        "esp32:esp32:esp32:PSRAM=disabled,PartitionScheme=default,CPUFreq=240,FlashMode=qio,FlashFreq=80,FlashSize=4M,UploadSpeed=921600,LoopCore=1,EventsCore=1,DebugLevel=none",
+        "--build-property",
+        "compiler.optimization_flags=-O2",
+        "${workspaceFolder}"
+      ],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": ["$gcc"],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      }
+    },
+    {
+      "label": "Arduino: Build & Upload",
+      "type": "shell",
+      "command": "arduino-cli",
+      "args": [
+        "upload",
+        "-p",
+        "COM4",
+        "--fqbn",
+        "esp32:esp32:esp32:PSRAM=disabled,PartitionScheme=default,CPUFreq=240,FlashMode=qio,FlashFreq=80,FlashSize=4M,UploadSpeed=921600,LoopCore=1,EventsCore=1,DebugLevel=none",
+        "${workspaceFolder}"
+      ],
+      "dependsOn": "Arduino: Build",
+      "dependsOrder": "sequence",
+      "group": "build",
+      "problemMatcher": ["$gcc"],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      }
+    }
+  ]
+}
