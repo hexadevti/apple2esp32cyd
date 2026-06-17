@@ -293,6 +293,7 @@ void listFiles(bool downDirection)
     shown++;
     id++;
   }
+  optionsUiMarkDirty();   // refresh the modern touch UI on PS/2 file navigation
 }
 
 void colorDemo() {
@@ -316,8 +317,10 @@ void showHideOptionsWindow() {
   OptionsWindow = !OptionsWindow;
   clearScreen();
   if (OptionsWindow) {
-    listFiles(true);
-    optionsScreenRender();
+    optionsUiOpen();   // modern touch UI (see optionsui.ino)
+  } else {
+    saveConfig();              // persist all settings on close (no reboot needed)
+    oskIgnoreCurrentTouch();   // closing tap must not pop up the on-screen keyboard
   }
 
   paused = OptionsWindow;
@@ -453,5 +456,6 @@ void optionsScreenRender()
   print("<Crtl> + <Enter> Save");
   setCursor(0,23);
   print(" and Reboot");
+  optionsUiMarkDirty();   // refresh the modern touch UI when PS/2 changes a setting
 }
   

@@ -91,4 +91,14 @@ void saveEEPROM() {
     EEPROM.writeChar(VolumeEEPROMaddress, volume);
     EEPROM.writeBool(dacSoundEEPROMaddress, dacSound);
   }
+
+// Persist every user-configurable option (all toggles, volume, and the selected
+// disk/HD image) and commit. Called when the settings window closes, so changes
+// survive a reboot even without using "Save & Reboot".
+void saveConfig() {
+    saveEEPROM();
+    writeStringToEEPROM(HdFileNameEEPROMaddress, selectedHdFileName);
+    writeStringToEEPROM(DiskFileNameEEPROMaddress, selectedDiskFileName);
+    EEPROM.commit();
+  }
   

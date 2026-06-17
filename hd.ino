@@ -37,20 +37,21 @@ void HDSetup()
   }
 }
 
-void loadHdAsync(void *pvParameters)
+// Scan the SD root for HD images into hdFiles. Synchronous so it can be called
+// directly (e.g. from the Settings device toggle) without racing the renderer.
+void loadHdFilesSync()
 {
   hdFiles.clear();
   File root = FSTYPE.open("/");
   if (!root)
   {
     printLog("Failed to open directory");
-    vTaskDelete(NULL); // Self-deletion 
     return;
   }
   if (!root.isDirectory())
   {
     printLog("Not a directory");
-    vTaskDelete(NULL); // Self-deletion 
+    root.close();
     return;
   }
   File file = root.openNextFile();
@@ -73,8 +74,13 @@ void loadHdAsync(void *pvParameters)
   }
   file.close();
   root.close();
+}
+
+void loadHdAsync(void *pvParameters)
+{
+  loadHdFilesSync();
   listFiles(false); // Refresh the file list
-  vTaskDelete(NULL); // Self-deletion 
+  vTaskDelete(NULL); // Self-deletion
 }
 
 

@@ -1,5 +1,8 @@
 
 
+#include "applelogo.h"   // embedded Apple II boot-splash logo (RGB565)
+bool splashActive = true; // true until the boot splash times out or is dismissed
+
 const uint16_t colors[8] = {TFT_BLACK, TFT_GREEN, TFT_PURPLE, TFT_WHITE, TFT_BLACK, tft.color565(255, 20, 0), TFT_SKYBLUE, TFT_WHITE};
 const uint16_t colors16[16] = {tft.color565(0, 0, 0), tft.color565(147, 11, 124), tft.color565(98, 76, 0), tft.color565(249, 86, 29),
                                        tft.color565(0, 118, 12), tft.color565(126, 126, 126), tft.color565(67, 200, 0), tft.color565(220, 205, 22),
@@ -37,17 +40,59 @@ float screen_height = 192;
 uint16_t last_y = 0;
 uint16_t last_x = 0;
 
+// Boot splash: draw the Apple II logo centred on a white screen for ~3s, dismissible
+// early by any touch or joystick button. Runs on core 0 from renderLoop (owns the TFT).
+static void splashService()
+{
+  static bool drawn = false;
+  static unsigned long startMs = 0;
+  if (!drawn) {
+    startMs = millis();
+    tft.fillScreen(TFT_BLACK);
+    tft.setSwapBytes(true);
+    tft.pushImage((320 - APPLE_LOGO_W) / 2, (240 - APPLE_LOGO_H) / 2,
+                  APPLE_LOGO_W, APPLE_LOGO_H, appleLogo);
+    tft.setSwapBytes(false);
+    drawn = true;
+  }
+  int16_t tx, ty;
+  bool touched = touchRead(&tx, &ty);
+  bool button  = Pb0 || Pb1 || Pb2 || Pb3;
+  if (millis() - startMs >= 3000 || touched || button) {
+    splashActive = false;
+    clearScr = true;   // wipe the whole panel before the emulator video starts
+  }
+}
+
 void renderLoop(void *pvParameters)
 {
-  
+
   while (running)
   {
     Vertical_blankingOn_Off = false;
     unsigned long startTime = millis();
 
+    // Boot splash takes over the screen until it times out / is dismissed.
+    if (splashActive)
+    {
+      splashService();
+      vTaskDelay(pdMS_TO_TICKS(15));
+      continue;
+    }
+
     // On-screen touch keyboard: poll touch every frame so its state is current
     // before we pick the raster geometry below.
     oskPoll();
+
+    // Modern touch-driven settings window takes over the whole screen (CPU paused).
+    if (OptionsWindow)
+    {
+      optionsUiPoll();
+      optionsUiRender();
+      Vertical_blankingOn_Off = true;
+      vTaskDelay(pdMS_TO_TICKS(15));
+      continue;
+    }
 
     // 320x240 TFT: center the 280x192 raster (overriding the S3/VGA margins below).
     // When the touch keyboard is open, squeeze the raster into the top rows so the
@@ -72,7 +117,7 @@ void renderLoop(void *pvParameters)
     else if (!OptionsWindow && AppleIIe && DHiResOn_Off && !videoColor)
     tft.setAddrWindow(margin_x, margin_y, 280, rasterH); // DHiRes mono (centered 280)
     else if (OptionsWindow || clearScr)
-    tft.setAddrWindow(2, 0, 315, 240);
+    tft.setAddrWindow(0, 0, 320, 240);
     else
     tft.setAddrWindow(margin_x, margin_y, 280, rasterH);
     tft.startWrite();
@@ -121,23 +166,9 @@ void renderLoop(void *pvParameters)
     //   }
     // }
     if (clearScr) {
-      y=0;
-      for (int v = 0; v < 30; v++)
-      {
-        for (int i = 0; i < 8; i++) // char lines
-        {
-          x=0;
-          for (int h = 0; h < 45; h++)
-          {
-            for (int c = 0; c < 7; c++) // char cols
-            {
-              tft.writeColor(colors[0], 1);
-              x++;
-            }
-          }
-          y++;
-        }
-      }
+      // Clear the whole 320x240 panel (not just the 315-wide text area) so closing
+      // the options window leaves no window remnants in the edge columns.
+      tft.writeColor(colors[0], (uint32_t)320 * 240);
       clearScr = false;
     }
     else if (OptionsWindow || DebugWindow) 

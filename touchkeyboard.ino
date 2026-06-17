@@ -142,7 +142,7 @@ void oskBuildLayout()
 void oskSetup()
 {
   oskBuildLayout();
-  Serial.printf("OSK build v2: %d keys (expect 59)\n", oskKeyCount);
+  Serial.printf("OSK build v3 (modern options UI): %d keys\n", oskKeyCount);
   printLog("Touch keyboard ready (tap the screen to open).");
 }
 
@@ -222,7 +222,9 @@ int oskRasterHeight()
 // ---------------------------------------------------------------------------
 // Touch reading
 // ---------------------------------------------------------------------------
-static bool oskReadTouch(int16_t *sx, int16_t *sy)
+// Shared, calibrated touch reader (also used by the options UI, optionsui.ino).
+// Returns false when nothing is pressed; otherwise fills screen coords (0..319, 0..239).
+bool touchRead(int16_t *sx, int16_t *sy)
 {
   if (tft.getTouchRawZ() < OSK_TS_ZTHRESH) return false;
 
@@ -319,6 +321,16 @@ static void oskHandleKey(int i)
       osk_ctrl = !osk_ctrl;
       oskDrawKey(i, false);
       break;
+    case OSK_ACT_ESC:
+      if (osk_ctrl) {                 // Ctrl+Esc opens the settings menu (like PS/2)
+        oskHide();
+        showHideOptionsWindow();
+        return;
+      }
+      oskInject(i);
+      osk_pressedIdx = i;
+      oskDrawKey(i, true);
+      break;
     default:
       oskInject(i);
       osk_pressedIdx = i;
@@ -341,7 +353,7 @@ void oskPoll()
   }
 
   int16_t sx = 0, sy = 0;
-  bool down = oskReadTouch(&sx, &sy);
+  bool down = touchRead(&sx, &sy);
 
   if (!osk_visible) {
     if (down && !osk_prevDown) {              // first contact opens the keyboard
@@ -376,4 +388,13 @@ void oskPoll()
   }
 
   osk_prevDown = down;
+}
+
+// Called when another full-screen UI (e.g. the settings window) closes via a touch.
+// The finger is usually still on the glass, so mark the touch as already-seen: that
+// stops the lingering contact from being read as a fresh tap that opens the keyboard.
+void oskIgnoreCurrentTouch()
+{
+  osk_visible  = false;
+  osk_prevDown = true;   // require a release before the next tap can open the keyboard
 }

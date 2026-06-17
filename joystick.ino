@@ -69,70 +69,35 @@ static void buttonDown(uint8_t btn)
 {
     if (btn == 3)
     {
-        showHideOptionsWindow();
+        showHideOptionsWindow();   // button 3 opens/closes the settings menu
+        return;
     }
     if (OptionsWindow)
     {
-        if (btn == 1)
-        {
-            if (HdDisk == initializedHdDisk)
-            {
-                if (HdDisk)
-                {
-                    setHdFile();
-                    saveHdFile();
-                }
-                else
-                {
-                    setDiskFile();
-                    saveDiskFile();
-                }
-            }
-            else
-            {
-                saveEEPROM();
-                EEPROM.commit();
-            }
-            ESP.restart();
-        }
+        if (btn == 0)              // fire: activate the focused control
+            optionsUiActivate();
+        return;
     }
-    else
+    if (!joystick)
     {
-        if (!joystick)
+        if (btn == 0 && !mouse) // when the mouse is active, button 0 is the click, not a keystroke
         {
-            if (btn == 0 && !mouse) // when the mouse is active, button 0 is the click, not a keystroke
-            {
-                keymem = 0xa0;
-            }
-            else if (btn == 1)
-            {
-                keymem = 0x8d;
-            }
-            else if (btn == 2)
-            {
-                keymem = 0x9b;
-            }
+            keymem = 0xa0;
+        }
+        else if (btn == 1)
+        {
+            keymem = 0x8d;
+        }
+        else if (btn == 2)
+        {
+            keymem = 0x9b;
         }
     }
 }
 
 static void buttonUp(uint8_t btn)
 {
-    if (OptionsWindow)
-    {
-        if (fnSelected == 0)
-        {
-            if (btn == 0)
-            {
-                if (HdDisk)
-                    setHdFile();
-                else
-                    setDiskFile();
-                diskChanged = true;
-                showHideOptionsWindow();
-            }
-        }
-    }
+    (void)btn;   // options-window actions now fire on button-down (optionsUiActivate)
 }
 
 static void changeDirection(bool x, uint8_t dir)
@@ -140,85 +105,14 @@ static void changeDirection(bool x, uint8_t dir)
     if (OptionsWindow)
     {
         if (x)
-        {
-            if (dir == 0)
-            {
-                if (fnSelected != 0)
-                {
-                    fnSelected--;
-                }
-            }
-            else if (dir == 2)
-            {
-                if (fnSelected < 7)
-                {
-                    fnSelected++;
-                }
-            }
-            optionsScreenRender();
+        { // left / right: move the focus highlight between controls
+            if (dir == 0)      optionsUiNav(-1);
+            else if (dir == 2) optionsUiNav(+1);
         }
         else
-        { // Y
-            if (dir == 0 || dir == 2)
-            {
-                if (fnSelected == 0)
-                {
-                    if (dir == 0)
-                    { // Up
-                        if (!HdDisk)
-                            prevDiskFile();
-                        else
-                            prevHdFile();
-                        listFiles(false);
-                    }
-                    else if (dir == 2)
-                    { // down
-                        if (!HdDisk)
-                            nextDiskFile();
-                        else
-                            nextHdFile();
-                        listFiles(true);
-                    }
-                }
-                else
-                {
-                    switch (fnSelected)
-                    {
-                    case 1:
-                        HdDisk = !HdDisk;
-                        if (HdDisk) {
-                        firstShowFile = 0;
-                        xTaskCreate(loadHdAsync, "loadHdAsync", 4096, NULL, 2, NULL);
-                        }
-                        else {
-                        firstShowFile = 0;
-                        xTaskCreate(loadDiskAsync, "loadDiskAsync", 4096, NULL, 2, NULL);
-                        }
-                        optionsScreenRender();
-                        break;
-                    case 2:
-                        AppleIIe = !AppleIIe;
-                        activeFlags = AppleIIe ? flagsIIe : flagsIIplus;
-                        break;
-                    case 3:
-                        Fast1MhzSpeed = !Fast1MhzSpeed;
-                        break;
-                    case 4:
-                        sound = !sound;
-                        break;
-                    case 5:
-                        joystick = !joystick;
-                        break;
-                    case 6:
-                        videoColor = !videoColor;
-                        break;
-                    case 7:
-                        dacSound = !dacSound;
-                        break;
-                    }
-                    optionsScreenRender();
-                }
-            }
+        { // up / down: act on the focused control
+            if (dir == 0)      optionsUiAdjust(-1);
+            else if (dir == 2) optionsUiAdjust(+1);
         }
     }
     else if (!joystick)
@@ -252,8 +146,10 @@ static void analogJoystickTask(void *pvParameters)
 {
     while (running)
     {
-        analogX = 4095 - analogRead(ANALOG_X_PIN);
-        analogY = 4095 - analogRead(ANALOG_Y_PIN);
+        int joyRawX = analogRead(ANALOG_X_PIN);
+        int joyRawY = analogRead(ANALOG_Y_PIN);
+        analogX = 4095 - joyRawX;
+        analogY = 4095 - joyRawY;
         digital_button1 = analogRead(DIGITAL_BUTTON12_PIN);
         //Serial.printf("analog x=%d, y=%d, centerX=%d, centerY=%d\n", analogX, analogY, joyCenterX, joyCenterY);
         // Serial.printf(" Pb0=%d, Pb1=%d Pb2=%d, Pb3=%d (%d)\n", Pb0, Pb1, Pb2, Pb3, digital_button1);
@@ -458,19 +354,28 @@ static void analogJoystickTask(void *pvParameters)
             mouseButton = Pb0; // button 0 = select / click
         }
 
-        if (analogY >= 4095)
-            joyX = 2; // Up
-        else if (analogY > 0 && analogY < 4095)
-            joyX = 1; // Center
-        else
-            joyX = 0; // Down
+        // Direction = deflection past a deadzone from the rest position captured at
+        // boot. The old code only reacted at the exact ADC rails (0/4095), which a real
+        // stick rarely hits, so nothing ever registered. Threshold-relative is robust.
+        const int joyThresh = 900;
+        if (analogY > joyCenterY + joyThresh)      joyX = 2;
+        else if (analogY < joyCenterY - joyThresh) joyX = 0;
+        else                                       joyX = 1;
 
-        if (analogX >= 4095)
-            joyY = 2; // Up
-        else if (analogX > 0 && analogX < 4095)
-            joyY = 1; // Center
-        else
-            joyY = 0; // Down
+        if (analogX > joyCenterX + joyThresh)      joyY = 2;
+        else if (analogX < joyCenterX - joyThresh) joyY = 0;
+        else                                       joyY = 1;
+
+        // Diagnostic: raw ADC + rest centers + decoded direction, throttled to ~4 Hz.
+        {
+            static unsigned long joyDbgT = 0;
+            if (millis() - joyDbgT > 250) {
+                joyDbgT = millis();
+                Serial.printf("JOY rawX(4)=%4d rawY(35)=%4d btn(34)=%4d | aX=%4d aY=%4d | cX=%4d cY=%4d | LR=%d UD=%d\n",
+                              joyRawX, joyRawY, digital_button1, analogX, analogY,
+                              joyCenterX, joyCenterY, joyY, joyX);
+            }
+        }
 
         if (pJoyX != joyX)
             changeDirection(0, joyX);

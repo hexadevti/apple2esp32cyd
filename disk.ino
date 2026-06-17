@@ -277,20 +277,21 @@ void setDiskFile()
   paused = false;
 }
 
-void loadDiskAsync(void *pvParameters)
+// Scan the SD root for disk images into diskFiles. Synchronous so it can be called
+// directly (e.g. from the Settings device toggle) without racing the renderer.
+void loadDiskFilesSync()
 {
   diskFiles.clear();
   File root = FSTYPE.open("/");
   if (!root)
   {
     printLog("Failed to open directory");
-    vTaskDelete(NULL); // Self-deletion 
     return;
   }
   if (!root.isDirectory())
   {
     printLog("Not a directory");
-    vTaskDelete(NULL); // Self-deletion 
+    root.close();
     return;
   }
   File file = root.openNextFile();
@@ -313,8 +314,13 @@ void loadDiskAsync(void *pvParameters)
   }
   file.close();
   root.close();
+}
+
+void loadDiskAsync(void *pvParameters)
+{
+  loadDiskFilesSync();
   listFiles(false); // Refresh the file list
-  vTaskDelete(NULL); // Self-deletion 
+  vTaskDelete(NULL); // Self-deletion
 }
 
 int getOffset(int track, int sector)
