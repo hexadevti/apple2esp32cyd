@@ -1,15 +1,14 @@
 #include "config.h"
 
-// #include <XPT2046_Touchscreen.h>
-// #define TOUCH_CS_PIN  38
-// XPT2046_Touchscreen ts(TOUCH_CS_PIN);
-// static SPIClass fspi { FSPI };
-
 void setup() {
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, HIGH); // Turn off green LED
   logSetup();
-  epromSetup();
+  epromSetup();   // loads currentPlatform (and all saved settings) from EEPROM
+
+  // Display, touch, audio and joystick are shared across platforms; the calls below
+  // initialise the Apple II core. When the C64/NES cores are added, branch the
+  // core-specific init on currentPlatform here (the splash reboots after a change).
   memoryAlloc();
   FSSetup();
   diskSetup();
@@ -23,14 +22,16 @@ void setup() {
 
   joystickSetup();
   printLog("Ready.");
-
-  // MOSI=11, MISO=12, SCK=13
-  //ts.begin();
-  // ts.begin(fspi); // use alternate SPI port
-  // ts.setRotation(1);
-  
 }
 
 void loop() {
-  cpuLoop();
+  // Platform dispatch: each emulator core has its own main loop. Only the Apple II
+  // core exists today; C64 / NES are selected on the boot splash (video.ino) and
+  // will plug in here once implemented.
+  switch (currentPlatform) {
+    case PLATFORM_APPLE2: cpuLoop(); break;
+    // case PLATFORM_C64:  c64Loop(); break;   // TODO
+    // case PLATFORM_NES:  nesLoop(); break;    // TODO
+    default:              cpuLoop(); break;
+  }
 }

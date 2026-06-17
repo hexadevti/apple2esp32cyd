@@ -154,6 +154,12 @@ static bool videoColor = true;
 static bool wifiConnected = false;
 static uint8_t volume = 0x40;
 
+// Target system for the multi-platform emulator. Apple II is implemented; C64 and
+// NES are placeholders selectable from the boot splash (see video.ino splashService
+// and the dispatch in apple2esp32cyd.ino). Persisted in EEPROM.
+enum Platform : uint8_t { PLATFORM_APPLE2 = 0, PLATFORM_C64 = 1, PLATFORM_NES = 2 };
+static uint8_t currentPlatform = PLATFORM_APPLE2;
+
 // Log Config
 char buf[0xff];
 int logLineCount = 1;
@@ -167,6 +173,7 @@ int logLineCount = 1;
 #define SoundEEPROMaddress 5
 #define VolumeEEPROMaddress 6
 #define dacSoundEEPROMaddress 7
+#define PlatformEEPROMaddress 8
 #define NewDeviceConfigEEPROMaddress 50
 #define DiskFileNameEEPROMaddress 128
 #define HdFileNameEEPROMaddress 256

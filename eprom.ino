@@ -19,6 +19,7 @@ void epromSetup() {
     int e9 = EEPROM.writeBool(SoundEEPROMaddress, true);
     int e10 = EEPROM.writeChar(VolumeEEPROMaddress, 0x40);
     int e11 = EEPROM.writeBool(dacSoundEEPROMaddress, false);
+    int e12 = EEPROM.writeChar(PlatformEEPROMaddress, PLATFORM_APPLE2);
     int e7 = writeStringToEEPROM(NewDeviceConfigEEPROMaddress, "ok");
     int e5 = writeStringToEEPROM(HdFileNameEEPROMaddress, "/");
     int e6 = writeStringToEEPROM(DiskFileNameEEPROMaddress, "/karateka.dsk");
@@ -33,6 +34,8 @@ void epromSetup() {
   sound = EEPROM.readBool(SoundEEPROMaddress);
   dacSound = EEPROM.readBool(dacSoundEEPROMaddress);
   volume = EEPROM.readChar(VolumeEEPROMaddress);
+  currentPlatform = EEPROM.readChar(PlatformEEPROMaddress);
+  if (currentPlatform > PLATFORM_NES) currentPlatform = PLATFORM_APPLE2;  // unset/garbage -> default
     
   if (HdDisk) {
     int size = readStringFromEEPROM(HdFileNameEEPROMaddress, &selectedHdFileName);
@@ -90,6 +93,7 @@ void saveEEPROM() {
     EEPROM.writeBool(SoundEEPROMaddress, sound);
     EEPROM.writeChar(VolumeEEPROMaddress, volume);
     EEPROM.writeBool(dacSoundEEPROMaddress, dacSound);
+    EEPROM.writeChar(PlatformEEPROMaddress, currentPlatform);
   }
 
 // Persist every user-configurable option (all toggles, volume, and the selected

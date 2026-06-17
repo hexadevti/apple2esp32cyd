@@ -40,8 +40,58 @@ float screen_height = 192;
 uint16_t last_y = 0;
 uint16_t last_x = 0;
 
-// Boot splash: draw the Apple II logo centred on a white screen for ~3s, dismissible
-// early by any touch or joystick button. Runs on core 0 from renderLoop (owns the TFT).
+// Boot splash + platform selector. Shows the logo and three platform buttons; the
+// current platform is highlighted. Apple II is implemented and default; C64/NES are
+// placeholders ("SOON") until their cores are added. Tapping a platform selects it
+// (switching to a different one saves to EEPROM and reboots so setup() can init it);
+// tapping elsewhere, a joystick button, or the timeout boots the current platform.
+// Runs on core 0 from renderLoop (which owns the TFT).
+#define SPLASH_MS    3000
+#define SPLASH_BTN_Y 164
+#define SPLASH_BTN_H 44
+static const int splashBtnX[3] = {6, 110, 214};
+static const int splashBtnW    = 98;
+
+static int splashHitTest(int16_t x, int16_t y)
+{
+  if (y < SPLASH_BTN_Y || y >= SPLASH_BTN_Y + SPLASH_BTN_H) return -1;
+  for (int i = 0; i < 3; i++)
+    if (x >= splashBtnX[i] && x < splashBtnX[i] + splashBtnW) return i;
+  return -1;
+}
+
+static void splashDrawBtn(int i, const char *label, bool enabled)
+{
+  bool active = (i == currentPlatform);
+  int x = splashBtnX[i], w = splashBtnW, y = SPLASH_BTN_Y, h = SPLASH_BTN_H;
+  uint16_t face = !enabled ? tft.color565(28, 30, 38)
+                : active   ? tft.color565(0, 120, 215)
+                           : tft.color565(44, 48, 60);
+  tft.fillRoundRect(x, y, w, h, 6, face);
+  tft.drawRoundRect(x, y, w, h, 6, active ? TFT_WHITE : tft.color565(70, 78, 92));
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(enabled ? TFT_WHITE : tft.color565(110, 118, 130), face);
+  tft.drawString(label, x + w / 2, enabled ? y + h / 2 : y + h / 2 - 6, 2);
+  if (!enabled) {
+    tft.setTextColor(tft.color565(110, 118, 130), face);
+    tft.drawString("SOON", x + w / 2, y + h - 12, 1);
+  }
+}
+
+static void splashFinish()           // boot the current platform
+{
+  splashActive = false;
+  clearScr = true;                   // wipe the whole panel before the emulator video starts
+}
+
+static void splashSelect(uint8_t platform)
+{
+  if (platform == currentPlatform) { splashFinish(); return; }
+  currentPlatform = platform;        // switching platforms needs a reboot to re-init
+  saveConfig();
+  ESP.restart();
+}
+
 static void splashService()
 {
   static bool drawn = false;
@@ -50,18 +100,26 @@ static void splashService()
     startMs = millis();
     tft.fillScreen(TFT_BLACK);
     tft.setSwapBytes(true);
-    tft.pushImage((320 - APPLE_LOGO_W) / 2, (240 - APPLE_LOGO_H) / 2,
-                  APPLE_LOGO_W, APPLE_LOGO_H, appleLogo);
+    tft.pushImage((320 - APPLE_LOGO_W) / 2, 38, APPLE_LOGO_W, APPLE_LOGO_H, appleLogo);
     tft.setSwapBytes(false);
+    tft.setTextDatum(MC_DATUM);
+    tft.setTextColor(tft.color565(150, 160, 175), TFT_BLACK);
+    tft.drawString("SELECT SYSTEM", 160, 150, 2);
+    splashDrawBtn(PLATFORM_APPLE2, "APPLE II", true);
+    splashDrawBtn(PLATFORM_C64,    "C64",      false);
+    splashDrawBtn(PLATFORM_NES,    "NES",      false);
     drawn = true;
   }
+
   int16_t tx, ty;
-  bool touched = touchRead(&tx, &ty);
-  bool button  = Pb0 || Pb1 || Pb2 || Pb3;
-  if (millis() - startMs >= 3000 || touched || button) {
-    splashActive = false;
-    clearScr = true;   // wipe the whole panel before the emulator video starts
+  if (touchRead(&tx, &ty)) {
+    int b = splashHitTest(tx, ty);
+    if (b == PLATFORM_APPLE2) splashSelect(PLATFORM_APPLE2);  // only implemented core
+    else if (b < 0)           splashFinish();                 // tapped outside -> boot current
+    // b == C64/NES: not available yet, ignore
+    return;
   }
+  if (millis() - startMs >= SPLASH_MS || Pb0 || Pb1 || Pb2 || Pb3) splashFinish();
 }
 
 void renderLoop(void *pvParameters)
