@@ -56,7 +56,7 @@ uint32_t lastCpuCycleCount = 0;
 uint32_t diffCpuCycleCount = 0;
 
 // Throughput meter (effective 6502 clock). Set false to silence.
-bool perfMeter = true;
+bool perfMeter = false;
 // Cached active flags table (avoids the AppleIIe ternary + table base load per instruction).
 const unsigned char* activeFlags;
 

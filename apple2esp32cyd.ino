@@ -16,12 +16,12 @@ void setup() {
   HDSetup();
   videoSetup();
   keyboardSetup();
+  oskSetup();
 
   speakerSetup();
   //wifiSetup();
 
   joystickSetup();
-  //bleSetup();
   printLog("Ready.");
 
   // MOSI=11, MISO=12, SCK=13

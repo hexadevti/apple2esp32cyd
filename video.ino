@@ -45,11 +45,18 @@ void renderLoop(void *pvParameters)
     Vertical_blankingOn_Off = false;
     unsigned long startTime = millis();
 
+    // On-screen touch keyboard: poll touch every frame so its state is current
+    // before we pick the raster geometry below.
+    oskPoll();
+
     // 320x240 TFT: center the 280x192 raster (overriding the S3/VGA margins below).
+    // When the touch keyboard is open, squeeze the raster into the top rows so the
+    // emulated screen stays live above the keyboard; the vertical scaler (coef192)
+    // and the matching setAddrWindow height handle the squeeze automatically.
     margin_x = 20;
-    margin_y = 24;
+    margin_y = oskRasterTop();
     screen_width = 280;
-    screen_height = 192;
+    screen_height = oskRasterHeight();
     last_y = margin_y;
     last_x = margin_x;
 
@@ -58,14 +65,16 @@ void renderLoop(void *pvParameters)
     float coef280 = screen_width / 280;
     float coef140 = screen_width / 140;
 
+    int rasterH = (int)screen_height; // matches the line count produced by coef192
+
     if (!OptionsWindow && AppleIIe && !Cols40_80 && !DHiResOn_Off)
-    tft.setAddrWindow(0, margin_y, 320, 192); // Set the area to draw
+    tft.setAddrWindow(0, margin_y, 320, rasterH); // Set the area to draw
     else if (!OptionsWindow && AppleIIe && DHiResOn_Off && !videoColor)
-    tft.setAddrWindow(margin_x, margin_y, 280, 192); // DHiRes mono (centered 280)
+    tft.setAddrWindow(margin_x, margin_y, 280, rasterH); // DHiRes mono (centered 280)
     else if (OptionsWindow || clearScr)
     tft.setAddrWindow(2, 0, 315, 240);
     else
-    tft.setAddrWindow(margin_x, margin_y, 280, 192);
+    tft.setAddrWindow(margin_x, margin_y, 280, rasterH);
     tft.startWrite();
     
     
@@ -572,6 +581,10 @@ void renderLoop(void *pvParameters)
     
     unsigned long endTime2 = millis();
     tft.endWrite();
+    // Draw the touch keyboard over the bottom rows (only when it changed). The
+    // squeezed raster above never touches this region, so one draw per change is
+    // enough and there is no flicker.
+    if (oskActive()) oskRender();
     Vertical_blankingOn_Off = true;
     unsigned long endTime3 = millis();
     vTaskDelay(pdMS_TO_TICKS(5));
