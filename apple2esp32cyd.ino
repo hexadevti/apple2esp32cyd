@@ -1,26 +1,36 @@
-#include "config.h"
+#include "emu.h"
 
 void setup() {
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, HIGH); // Turn off green LED
   logSetup();
   epromSetup();   // loads currentPlatform (and all saved settings) from EEPROM
+  c64FreeBtMem();   // BOTH platforms: reclaim the unused BT controller DRAM (~36K) up front so
+                    // tasks/buffers have heap room (Apple's render/joystick tasks were failing).
 
-  // Display, touch, audio and joystick are shared across platforms; the calls below
-  // initialise the Apple II core. When the C64/NES cores are added, branch the
-  // core-specific init on currentPlatform here (the splash reboots after a change).
-  memoryAlloc();
-  FSSetup();
-  diskSetup();
-  HDSetup();
-  videoSetup();
-  keyboardSetup();
-  oskSetup();
-
-  speakerSetup();
-  //wifiSetup();
-
-  joystickSetup();
+  // Platform-specific core init. The display (videoSetup -> renderLoop + boot splash)
+  // and touch keyboard (oskSetup) are shared; each core initialises before videoSetup
+  // so the render loop has valid state to draw (C64's render is null-guarded anyway).
+  if (currentPlatform == PLATFORM_C64) {
+    FSSetup();         // SD next: its DMA buffer needs the contiguous low-DRAM region before
+                       // the big C64 allocations (64K RAM + framebuffer) fragment it.
+    c64Setup();        // 64K RAM, ROMs, VIC/CIA, reset 6510
+    videoSetup();      // TFT + render loop (+ splash)
+    oskSetup();
+    joystickSetup();
+    sidSetup();        // 3-voice SID -> I2S DAC (GPIO26), LAST so its I2S DMA comes after SD
+    c64Autostart();    // boot-autoload the saved image, if enabled
+  } else {             // Apple II
+    memoryAlloc();
+    FSSetup();
+    diskSetup();
+    HDSetup();
+    videoSetup();
+    keyboardSetup();
+    oskSetup();
+    speakerSetup();
+    joystickSetup();
+  }
   printLog("Ready.");
 }
 
@@ -30,7 +40,7 @@ void loop() {
   // will plug in here once implemented.
   switch (currentPlatform) {
     case PLATFORM_APPLE2: cpuLoop(); break;
-    // case PLATFORM_C64:  c64Loop(); break;   // TODO
+    case PLATFORM_C64:    c64Loop(); break;
     // case PLATFORM_NES:  nesLoop(); break;    // TODO
     default:              cpuLoop(); break;
   }

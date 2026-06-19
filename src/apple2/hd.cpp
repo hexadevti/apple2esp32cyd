@@ -1,3 +1,6 @@
+#include "../../emu.h"
+#include <dirent.h>   // raw POSIX readdir() for the fast SD scan (see loadHdFilesSync)
+
 // Memory map (for slot 7):
 
 //  C0F0	(r)   EXECUTE AND RETURN STATUS
@@ -42,38 +45,28 @@ void HDSetup()
 void loadHdFilesSync()
 {
   hdFiles.clear();
-  File root = FSTYPE.open("/");
-  if (!root)
+  // Fast scan via raw readdir() - see loadDiskFilesSync() for why (avoids per-entry fopen/stat).
+  DIR *dp = opendir(SD_VFS_ROOT);
+  if (!dp)
   {
     printLog("Failed to open directory");
     return;
   }
-  if (!root.isDirectory())
+  struct dirent *de;
+  while ((de = readdir(dp)) != nullptr)
   {
-    printLog("Not a directory");
-    root.close();
-    return;
-  }
-  File file = root.openNextFile();
-  while (file)
-  {
-    if (!file.isDirectory())
+    if (de->d_type == DT_DIR) continue;                 // root files only (matches old behavior)
+    std::string fileName = de->d_name;
+    for (int j = 0; j < (int)fileExtensions.size(); j++)
     {
-      std::string fileName = file.name();
-      for (int j = 0; j < fileExtensions.size(); j++)
+      if ((int)fileName.find(fileExtensions[j].c_str()) > 0)
       {
-        if ((int)fileName.find(fileExtensions[j].c_str()) > 0)
-        {
-          std::string str(file.name());
-          // Serial.printf("File name on disk: %s\n", str.c_str());
-          hdFiles.push_back("/" + str);
-        }
+        hdFiles.push_back("/" + fileName);
+        break;                                          // one extension match is enough
       }
     }
-    file = root.openNextFile();
   }
-  file.close();
-  root.close();
+  closedir(dp);
 }
 
 void loadHdAsync(void *pvParameters)

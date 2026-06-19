@@ -1,3 +1,5 @@
+#include "../../emu.h"
+
 // touchkeyboard.ino - On-screen virtual keyboard driven by the CYD touch panel.
 //
 // The XPT2046 touch controller shares the TFT's SPI bus (TOUCH_CS is defined in
@@ -39,7 +41,8 @@
 // ---------------------------------------------------------------------------
 // Layout geometry (screen is 320 wide x 240 tall in rotation 3)
 // ---------------------------------------------------------------------------
-#define OSK_Y      112         // top of the keyboard overlay
+#define OSK_Y      112         // top of the keyboard overlay (Apple: 5 rows 112..237)
+#define OSK_C64_TOP 87         // C64 keyboard top: an extra function-key row above OSK_Y
 #define OSK_ROWH   25
 #define OSK_GAP    1
 
@@ -57,6 +60,13 @@
 #define OSK_ACT_DEL    10
 #define OSK_ACT_UP     11
 #define OSK_ACT_DOWN   12
+#define OSK_ACT_RUNSTOP 13   // C64 RUN/STOP
+#define OSK_ACT_MENU    14   // open the settings window (C64)
+#define OSK_ACT_F1      15   // C64 function keys (matrix col0; SHIFT gives F2/F4/F6/F8)
+#define OSK_ACT_F3      16
+#define OSK_ACT_F5      17
+#define OSK_ACT_F7      18
+#define OSK_ACT_RESET   19   // Apple II RESET key (soft reset only with CTRL held)
 
 #define OSK_MAX_KEYS 80
 
@@ -65,6 +75,7 @@ struct OskKey {
   char    norm;   // character when un-shifted (OSK_ACT_CHAR only)
   char    shft;   // character when shifted
   uint8_t act;
+  int8_t  mcol, mrow;  // C64 keyboard-matrix position (PA col, PB row); -1 = none/Apple
 };
 
 static OskKey oskKeys[OSK_MAX_KEYS];
@@ -85,7 +96,27 @@ static void oskAddKey(int16_t x, int16_t y, int16_t w, int16_t h,
                       char n, char s, uint8_t act)
 {
   if (oskKeyCount >= OSK_MAX_KEYS) return;
-  oskKeys[oskKeyCount++] = { x, y, w, h, n, s, act };
+  oskKeys[oskKeyCount++] = { x, y, w, h, n, s, act, -1, -1 };
+}
+
+// C64: add a key carrying its keyboard-matrix position (col=PA line, row=PB line).
+static void oskAddKeyM(int16_t x, int16_t y, int16_t w, int16_t h,
+                       char n, char s, uint8_t act, int8_t col, int8_t row)
+{
+  if (oskKeyCount >= OSK_MAX_KEYS) return;
+  oskKeys[oskKeyCount++] = { x, y, w, h, n, s, act, col, row };
+}
+
+// C64: tile a row of character keys, each with its matrix (col,row), across [x0,x0+totalW).
+static void oskAddRowC64(const char *labels, const int8_t *cols, const int8_t *rows,
+                         int16_t y, int16_t x0, int16_t totalW)
+{
+  int n = 0; while (labels[n]) n++;
+  for (int i = 0; i < n; i++) {
+    int16_t kx = x0 + (int16_t)((long)totalW * i / n);
+    int16_t kw = (int16_t)(x0 + (long)totalW * (i + 1) / n) - kx;
+    oskAddKeyM(kx, y, kw, OSK_ROWH, labels[i], labels[i], OSK_ACT_CHAR, cols[i], rows[i]);
+  }
 }
 
 // Tile strlen(norm) character keys exactly across [x0, x0+totalW) so the row
@@ -101,8 +132,55 @@ static void oskAddRowFit(const char *norm, const char *shft, int16_t y, int16_t 
   }
 }
 
+// Top of the on-screen keyboard. The C64 has an extra function-key row, so it starts higher.
+static int oskTopY() { return (currentPlatform == PLATFORM_C64) ? OSK_C64_TOP : OSK_Y; }
+
+// C64 keyboard, mapped to the CIA1 matrix (col=PA line, row=PB line). SHIFT is a sticky
+// modifier applied to the next key; cursor LEFT/UP send SHIFT+CRSR. RUN/STOP, RETURN,
+// DEL(=INST/DEL), SPACE are matrix keys. A top row carries the function keys F1/F3/F5/F7
+// (all in matrix column 0); SHIFT turns them into F2/F4/F6/F8.
+static void oskBuildLayoutC64()
+{
+  oskKeyCount = 0;
+  const int16_t fky = OSK_C64_TOP;          // function-key row (above the number row)
+  const int16_t r1y = OSK_Y, r2y = OSK_Y + OSK_ROWH, r3y = OSK_Y + 2 * OSK_ROWH,
+                r4y = OSK_Y + 3 * OSK_ROWH, r5y = OSK_Y + 4 * OSK_ROWH;
+
+  oskAddKeyM(0,   fky, 80, OSK_ROWH, 0, 0, OSK_ACT_F1, 0, 4);
+  oskAddKeyM(80,  fky, 80, OSK_ROWH, 0, 0, OSK_ACT_F3, 0, 5);
+  oskAddKeyM(160, fky, 80, OSK_ROWH, 0, 0, OSK_ACT_F5, 0, 6);
+  oskAddKeyM(240, fky, 80, OSK_ROWH, 0, 0, OSK_ACT_F7, 0, 3);
+
+  static const int8_t c1[] = {7,7,1,1,2,2,3,3,4,4}, q1[] = {0,3,0,3,0,3,0,3,0,3};
+  oskAddRowC64("1234567890", c1, q1, r1y, 0, 288);
+  oskAddKeyM(288, r1y, 32, OSK_ROWH, 0, 0, OSK_ACT_DEL, 0, 0);
+
+  static const int8_t c2[] = {7,1,1,2,2,3,3,4,4,5}, q2[] = {6,1,6,1,6,1,6,1,6,1};
+  oskAddRowC64("QWERTYUIOP", c2, q2, r2y, 0, 320);
+
+  static const int8_t c3[] = {1,1,2,2,3,3,4,4,5}, q3[] = {2,5,2,5,2,5,2,5,2};
+  oskAddRowC64("ASDFGHJKL", c3, q3, r3y, 0, 278);
+  oskAddKeyM(278, r3y, 42, OSK_ROWH, 0, 0, OSK_ACT_RETURN, 0, 1);
+
+  static const int8_t c4[] = {1,2,2,3,3,4,4,5,5,6}, q4[] = {4,7,4,7,4,7,4,7,4,7};
+  oskAddRowC64("ZXCVBNM,./", c4, q4, r4y, 0, 320);
+
+  int16_t x = 0;
+  oskAddKey (x, r5y, 40, OSK_ROWH, 0,   0,   OSK_ACT_SHIFT);            x += 40;
+  oskAddKeyM(x, r5y, 38, OSK_ROWH, 0,   0,   OSK_ACT_RUNSTOP, 7, 7);   x += 38;
+  oskAddKeyM(x, r5y, 76, OSK_ROWH, ' ', ' ', OSK_ACT_SPACE,   7, 4);   x += 76;
+  oskAddKey (x, r5y, 44, OSK_ROWH, 0,   0,   OSK_ACT_MENU);            x += 44;
+  oskAddKeyM(x, r5y, 24, OSK_ROWH, 0,   0,   OSK_ACT_LEFT,    0, 2);   x += 24;
+  oskAddKeyM(x, r5y, 24, OSK_ROWH, 0,   0,   OSK_ACT_DOWN,    0, 7);   x += 24;
+  oskAddKeyM(x, r5y, 24, OSK_ROWH, 0,   0,   OSK_ACT_UP,      0, 7);   x += 24;
+  oskAddKeyM(x, r5y, 24, OSK_ROWH, 0,   0,   OSK_ACT_RIGHT,   0, 2);   x += 24;
+  oskAddKey (x, r5y, 26, OSK_ROWH, 0,   0,   OSK_ACT_HIDE);           x += 26;
+}
+
 void oskBuildLayout()
 {
+  if (currentPlatform == PLATFORM_C64) { oskBuildLayoutC64(); return; }
+
   oskKeyCount = 0;
 
   const int16_t r1y = OSK_Y;                // 112
@@ -136,7 +214,9 @@ void oskBuildLayout()
   oskAddKey(x, r5y, 22, OSK_ROWH, 0,   0,   OSK_ACT_UP);     x += 22;
   oskAddKey(x, r5y, 22, OSK_ROWH, 0,   0,   OSK_ACT_RIGHT);  x += 22;
   oskAddKey(x, r5y, 42, OSK_ROWH, 0,   0,   OSK_ACT_RETURN); x += 42;
-  oskAddKey(x, r5y, 22, OSK_ROWH, 0,   0,   OSK_ACT_HIDE);   x += 22;
+  // RESET in place of the old hide key (CTRL+RESET = soft reset, like a real Apple II).
+  // Hide the keyboard by tapping above it.
+  oskAddKey(x, r5y, 22, OSK_ROWH, 0,   0,   OSK_ACT_RESET);  x += 22;
 }
 
 void oskSetup()
@@ -165,6 +245,13 @@ static void oskKeyLabel(int i, char *out)
     case OSK_ACT_ESC:    strcpy(out, "ESC");   break;
     case OSK_ACT_TAB:    strcpy(out, "TAB");   break;
     case OSK_ACT_DEL:    strcpy(out, "DEL");   break;
+    case OSK_ACT_RUNSTOP: strcpy(out, "R/S");  break;
+    case OSK_ACT_MENU:   strcpy(out, "MENU");  break;
+    case OSK_ACT_F1:     strcpy(out, "F1/2");  break;
+    case OSK_ACT_F3:     strcpy(out, "F3/4");  break;
+    case OSK_ACT_F5:     strcpy(out, "F5/6");  break;
+    case OSK_ACT_F7:     strcpy(out, "F7/8");  break;
+    case OSK_ACT_RESET:  strcpy(out, "RST");   break;
     default:             out[0] = osk_shift ? k.shft : k.norm; out[1] = 0; break;
   }
 }
@@ -177,6 +264,7 @@ static void oskDrawKey(int i, bool pressed)
   else if (k.act == OSK_ACT_SHIFT && osk_shift)      face = tft.color565(0, 120, 200);
   else if (k.act == OSK_ACT_CTRL  && osk_ctrl)       face = tft.color565(0, 120, 200);
   else if (k.act == OSK_ACT_HIDE)                    face = tft.color565(140, 30, 30);
+  else if (k.act == OSK_ACT_RESET)                   face = tft.color565(140, 30, 30);
   else                                               face = tft.color565(45, 45, 45);
 
   int16_t x = k.x + OSK_GAP, y = k.y + OSK_GAP;
@@ -194,7 +282,8 @@ static void oskDrawKey(int i, bool pressed)
 void oskRender()
 {
   if (!osk_dirty) return;
-  tft.fillRect(0, OSK_Y, 320, 240 - OSK_Y, TFT_BLACK);
+  int top = oskTopY();
+  tft.fillRect(0, top, 320, 240 - top, TFT_BLACK);
   for (int i = 0; i < oskKeyCount; i++)
     oskDrawKey(i, false);
   osk_dirty = false;
@@ -216,7 +305,7 @@ int oskRasterTop()
 
 int oskRasterHeight()
 {
-  return osk_visible ? OSK_Y : 192;
+  return osk_visible ? oskTopY() : 192;   // C64 flattens its screen into the rows above the kbd
 }
 
 // ---------------------------------------------------------------------------
@@ -305,8 +394,32 @@ static void oskHide()
   tft.fillScreen(TFT_BLACK);
 }
 
+// C64: press a key into the CIA1 matrix (+ SHIFT when the sticky shift is on, or for the
+// LEFT/UP cursor keys which are SHIFT+CRSR). Released in oskPoll via oskC64Up().
+static void oskC64Down(int i)
+{
+  const OskKey &k = oskKeys[i];
+  if (k.act == OSK_ACT_HIDE)  { oskHide(); return; }
+  if (k.act == OSK_ACT_MENU)  { oskHide(); showHideOptionsWindow(); return; }
+  if (k.act == OSK_ACT_SHIFT) { osk_shift = !osk_shift; osk_dirty = true; oskRender(); return; }
+  if (k.mcol >= 0) c64KeyMatrix(k.mrow, k.mcol, true);
+  bool autoShift = (k.act == OSK_ACT_LEFT || k.act == OSK_ACT_UP);
+  if (osk_shift || autoShift) c64KeyMatrix(7, 1, true);   // left SHIFT (PA1,PB7)
+  osk_pressedIdx = i;
+  oskDrawKey(i, true);
+}
+
+static void oskC64Up(int i)
+{
+  const OskKey &k = oskKeys[i];
+  if (k.mcol >= 0) c64KeyMatrix(k.mrow, k.mcol, false);
+  c64KeyMatrix(7, 1, false);   // release SHIFT (re-applied per key while sticky-shift is on)
+}
+
 static void oskHandleKey(int i)
 {
+  if (currentPlatform == PLATFORM_C64) { oskC64Down(i); return; }
+
   const OskKey &k = oskKeys[i];
   switch (k.act) {
     case OSK_ACT_HIDE:
@@ -320,6 +433,11 @@ static void oskHandleKey(int i)
     case OSK_ACT_CTRL:
       osk_ctrl = !osk_ctrl;
       oskDrawKey(i, false);
+      break;
+    case OSK_ACT_RESET:
+      // Like a real Apple II: RESET alone does nothing; CTRL+RESET is a soft reset.
+      if (osk_ctrl) { oskHide(); cpuReset(); }
+      else          { oskDrawKey(i, true); osk_pressedIdx = i; }   // just show the press
       break;
     case OSK_ACT_ESC:
       if (osk_ctrl) {                 // Ctrl+Esc opens the settings menu (like PS/2)
@@ -372,7 +490,7 @@ void oskPoll()
   }
 
   if (down && !osk_prevDown) {                 // rising edge = a fresh tap
-    if (sy < OSK_Y) {                          // tapped above the keyboard -> close
+    if (sy < oskTopY()) {                      // tapped above the keyboard -> close
       oskHide();
       osk_prevDown = down;
       return;
@@ -383,6 +501,7 @@ void oskPoll()
 
   if (!down && osk_pressedIdx >= 0) {          // released -> clear the press highlight
     int p = osk_pressedIdx;
+    if (currentPlatform == PLATFORM_C64) oskC64Up(p);   // release the matrix bits
     osk_pressedIdx = -1;
     oskDrawKey(p, false);
   }

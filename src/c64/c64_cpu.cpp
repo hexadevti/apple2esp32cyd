@@ -1,10 +1,14 @@
 // μ6502 - Barebones 6502 Emulator By Damian Peckett
 // dpeckett.com, <damian@pecke.tt>
+// Ported from C64Esp32 cpu.ino into namespace c64 (6510). IRQ/NMI + cycle-based raster
+// timing added for the multi-platform CYD build.
+
+#include "../../emu.h"
+#include "c64.h"
+
+namespace c64 {
 
 // Address Modes
-
-
-
 #define AD_IMP  0x01
 #define AD_A    0x02
 #define AD_ABS  0x03
@@ -55,13 +59,8 @@ uint32_t cpuCycleCount = 0;
 uint32_t lastCpuCycleCount = 0;
 uint32_t diffCpuCycleCount = 0;
 
-// Throughput meter (effective 6502 clock). Set false to silence.
-bool perfMeter = false;
-// Cached active flags table (avoids the AppleIIe ternary + table base load per instruction).
-const unsigned char* activeFlags;
-
 //high nibble SR flags, low nibble address mode
-const unsigned char flagsIIe[] = {
+const unsigned char flags65c02[] PROGMEM = {
 	//X0               X1                X2                    X3    X4                    X5                X6                X7    X8              X9                 XA                  XB    XC                    XD                XE                XF   
 	  AD_IMP,          AD_INDX,          UNDF,                 UNDF, FL_Z | AD_ZPG,/*e*/   FL_ZN | AD_ZPG,   FL_ZNC | AD_ZPG,  UNDF, AD_IMP,         FL_ZN | AD_IMM,    FL_ZNC | AD_A,      UNDF, FL_Z | AD_ABS,/*e*/   FL_ZN | AD_ABS,   FL_ZNC | AD_ABS,  UNDF, // 0X
 	  AD_REL,          FL_ZN | AD_INDY,  FL_ZN | AD_IZPG/*e*/, UNDF, FL_Z | AD_ZPG,/*e*/   FL_ZN | AD_ZPGX,  FL_ZNC | AD_ZPGX, UNDF, AD_IMP,         FL_ZN | AD_ABSY,   FL_ZN | AD_A,/*e*/  UNDF, FL_Z | AD_ABS,/*e*/   FL_ZN | AD_ABSX,  FL_ZNC | AD_ABSX, UNDF, // 1X
@@ -81,7 +80,7 @@ const unsigned char flagsIIe[] = {
 	  AD_REL,          FL_ALL | AD_INDY, FL_ALL | AD_IZPG/*e*/,UNDF, UNDF,                 FL_ALL | AD_ZPGX, FL_ZN | AD_ZPGX,  UNDF, AD_IMP,         FL_ALL | AD_ABSY,  FL_ZN | AD_IMP,/*e*/UNDF, UNDF,                 FL_ALL | AD_ABSX, FL_ZN | AD_ABSX,  UNDF  // FX
 };
 
-const unsigned char flagsIIplus[] = {
+const unsigned char flags6502[] PROGMEM = {
   AD_IMP, AD_INDX, UNDF, UNDF, UNDF, FL_ZN | AD_ZPG, FL_ZNC | AD_ZPG, UNDF, AD_IMP, FL_ZN | AD_IMM, FL_ZNC | AD_A, UNDF, UNDF, FL_ZN | AD_ABS, FL_ZNC | AD_ABS, UNDF,
   AD_REL, FL_ZN | AD_INDY, UNDF, UNDF, UNDF, FL_ZN | AD_ZPGX, FL_ZNC | AD_ZPGX, UNDF, AD_IMP, FL_ZN | AD_ABSY, UNDF, UNDF, UNDF, FL_ZN | AD_ABSX, FL_ZNC | AD_ABSX, UNDF,
   AD_ABS, FL_ZN | AD_INDX, UNDF, UNDF, FL_Z | AD_ZPG, FL_ZN | AD_ZPG, FL_ZNC | AD_ZPG, UNDF, AD_IMP, FL_ZN | AD_IMM, FL_ZNC | AD_A, UNDF, FL_Z | AD_ABS, FL_ZN | AD_ABS, FL_ZNC | AD_ABS, UNDF,
@@ -100,7 +99,7 @@ const unsigned char flagsIIplus[] = {
   AD_REL, FL_ALL | AD_INDY, UNDF, UNDF, UNDF, FL_ALL | AD_ZPGX, FL_ZN | AD_ZPGX, UNDF, AD_IMP, FL_ALL | AD_ABSY, UNDF, UNDF, UNDF, FL_ALL | AD_ABSX, FL_ZN | AD_ABSX, UNDF
 };
 
-const int cycles[] = { 7, 6, 1, 0, 0, 3, 5, 0, 3, 2, 2, 0, 0, 4, 6, 0, 
+const int cycles[] PROGMEM = { 7, 6, 1, 0, 0, 3, 5, 0, 3, 2, 2, 0, 0, 4, 6, 0, 
                        2, 5, 1, 0, 0, 4, 6, 0, 2, 4, 0, 0, 0, 4, 7, 0, 
                        6, 6, 1, 0, 3, 3, 5, 0, 4, 2, 2, 0, 4, 4, 6, 0, 
                        2, 5, 1, 0, 0, 4, 6, 0, 2, 4, 0, 0, 0, 4, 7, 0, 
@@ -131,19 +130,29 @@ unsigned char value8;
 unsigned short value16, value16_2, result;
 
 bool debug = false;
-bool debugPaused = false;
-bool debugStep = false;
-uint16_t debugAddressBreak = 0;
 
 void cpuReset()
 {
-  IIEMemoryBankReadRAM_ROM = false;
-  
   PC = read16(0xFFFC);
   STP = 0xFD;
 }
 
-IRAM_ATTR void setflags() {
+// Hardware interrupt entry. Pushes PC + status (B clear) and vectors through $FFFE/$FFFA.
+void cpuIRQ() {
+  push16(PC);
+  push8((SR & ~SR_BRK) | SR_FIXED_BITS);
+  SR |= SR_INT;
+  PC = read16(0xFFFE);
+}
+
+void cpuNMI() {
+  push16(PC);
+  push8((SR & ~SR_BRK) | SR_FIXED_BITS);
+  SR |= SR_INT;
+  PC = read16(0xFFFA);
+}
+
+void setflags() {
   // Mask out affected flags
   switch (opflags & 0xF0) {
     case  FL_ZN: SR &= 0x7D; break; // 1010 0000   0111 1101
@@ -153,6 +162,10 @@ IRAM_ATTR void setflags() {
     case   FL_Z: SR &= 0xFD; break; // 0010 0000   1111 1101
   }
   
+  // if (lastPC >= 0x5d00 && lastPC < 0x5e00) {
+  //   sprintf(buf, "setflag: opflag=%02X result=%02X opflags & 0x80=%02X result & 0x80=%02X", opflags, result, opflags & 0x80, result & 0x80);
+  //   printLog(buf);
+  // }
   
   // Set various status flags
   if (opflags & FL_N) SR |= (result & 0x80);                    //negative
@@ -174,53 +187,135 @@ void push8(unsigned char pushval) {
 unsigned short pull16() {
   STP++;
 	value16 = read8(STP_BASE + (STP));
+  //printAddrVal("pull16", STP_BASE + (STP),value16);
 	STP++;
 	value16 = value16 | ((unsigned short)read8(STP_BASE + (STP)) << 8);
+  //printAddrVal("pull16-2", STP_BASE + (STP),value16);
 	return value16;}
 
 unsigned char pull8() {
   return read8(STP_BASE + (++STP));
 }
 
-//int joyCount = 0;
-void cpuLoop() {
-  // Load the reset vector
-  PC = read16(0xFFFC);
-  STP = 0xFD;
-  activeFlags = AppleIIe ? flagsIIe : flagsIIplus;
+// Virtual-disk KERNAL LOAD trap. The KERNAL LOAD vector $FFD5 JMPs to $F49E; when the
+// CPU reaches $F49E with device 8 selected and a .d64 mounted, we service the load here
+// natively (read the directory + sector chain straight off the SD image) and RTS back to
+// the caller, instead of running the serial/IEC routine (there is no real 1541).
+//
+// At $F49E: A = verify flag, X/Y = alt load address, and SETNAM/SETLFS have set the
+// zero-page IEC vars: $B7 FNLEN, $BB/$BC FNADR, $BA device, $B9 secondary address.
+// On a relocating load (SA=0, e.g. LOAD"name",8) BASIC supplies the address; on a
+// non-relocating load (SA<>0, e.g. LOAD"*",8,1) the file's own load address is used.
+// Returns true when handled (PC set to the RTS target).
+static bool c64LoadTrap() {
+  if (read8(0xBA) != 8) return false;        // not device 8 -> let the ROM handle it
+  if (!::c64DiskMounted()) return false;     // nothing mounted -> ROM ("device not present")
 
+  write8(0xC3, X);                           // replicate $F49E: STX $C3 / STY $C4 (MEMUSS)
+  write8(0xC4, Y);
+  uint16_t altAddr = (uint16_t)(X | (Y << 8));
+
+  uint8_t  len  = read8(0xB7);
+  uint16_t fnad = (uint16_t)(read8(0xBB) | (read8(0xBC) << 8));
+  uint8_t  name[24];
+  if (len > 24) len = 24;
+  for (uint8_t i = 0; i < len; i++) name[i] = read8(fnad + i);
+
+  bool useFileAddr = (read8(0xB9) != 0);     // secondary address: 0 = relocate to altAddr
+  uint16_t start = 0, end = 0;
+  int err;
+  if (len >= 1 && name[0] == '$')            // directory listing
+    err = ::c64D64LoadDirectory(altAddr, &end) ? 0 : 4;
+  else
+    err = ::c64D64LoadByName(name, len, useFileAddr, altAddr, &start, &end);
+
+  if (err == 0) {
+    write8(0x90, 0x00);                       // STATUS = OK
+    write8(0xAE, end & 0xFF);                 // EAL/EAH = end address (+1)
+    write8(0xAF, (end >> 8) & 0xFF);
+    X = end & 0xFF;                           // KERNAL LOAD returns end addr in X/Y;
+    Y = (end >> 8) & 0xFF;                    // BASIC reads it to set VARTAB + relink
+    A = 0;
+    SR &= ~SR_CARRY;                          // carry clear = no error
+  } else {
+    A = (uint8_t)err;                         // 4 = FILE NOT FOUND
+    SR |= SR_CARRY;                           // carry set = error
+  }
+
+  PC = pull16() + 1;                          // RTS to the JSR $FFD5 caller
+  return true;
+}
+
+void cpuLoop() {
+  write8(0, 0x2f);
+  write8(1, 0x37);
+  write8(0x8004, 0);
+  PC = read16(0xfffc);
+  STP = 0xFD;
+  
+  lastPC = PC;
+
+  int rasterCycleAcc = 0;
+  uint8_t irqShadowSR = SR_INT;   // I-flag as of the previous instruction (see below)
+  bool nmiPrev = false;           // previous NMI line state (NMI is edge-triggered)
   while (running)
   {
-    lastPC = PC;
     while (paused)
     {
       delay(100);
     }
 
-    opcode = read8(PC++);
-
-    // Throughput meter: report effective MHz / instr-per-sec every ~256K instructions.
-    if (perfMeter)
-    {
-      static uint32_t mInstr = 0;
-      static uint64_t mCyc = 0;
-      static uint32_t mLast = 0;
-      mInstr++;
-      mCyc += cycles[opcode];
-      if ((mInstr & 0x3FFFF) == 0)
-      {
-        uint32_t now = millis();
-        if (mLast != 0)
-        {
-          float secs = (now - mLast) / 1000.0f;
-          if (secs > 0)
-            Serial.printf("PERF: %.2f MHz, %lu instr/s\n", (mCyc / 1e6) / secs, (unsigned long)(mInstr / secs));
-        }
-        mLast = now;
-        mInstr = 0;
-        mCyc = 0;
-      }
+    // Reset request (e.g. after mounting a .crt): re-enter the reset vector so the KERNAL
+    // re-detects the cartridge (CBM80 at $8004) or an Ultimax cart's own $FFFC vector.
+    if (c64ResetReq) {
+      c64ResetReq = false;
+      // A cartridge cold-starts via JMP($8000)/($FFFC) and the KERNAL then SKIPS its usual
+      // hardware init (IOINIT/CINT) for an autostart cart, so the cart expects power-on
+      // VIC/CIA state. But loading a cart from the menu leaves the previous BASIC/menu
+      // session's VIC + CIA state behind, which corrupts carts that rely on the defaults
+      // (black screen / garbage / hang). Re-init the chips so the cart boots from a clean
+      // machine, then clear any held key/joystick and pending IRQ/NMI edge.
+      initVarsAndRegs();          // VIC registers + derived state -> power-on defaults
+      ciaReset();                 // CIA timers + IRQ/NMI mask -> default (drop stale IRQ)
+      kbReset();                  // release any held keys / joystick lines
+      register1 = 0x37; decodeRegister1(0x37 & 7);
+      write8(0, 0x2f); write8(1, 0x37);
+      PC = read16(0xfffc);
+      STP = 0xFD;
+      SR = SR_FIXED_BITS | SR_INT;
+      irqShadowSR = SR_INT;
+      nmiPrev = false;
     }
+
+    // IRQ line = CIA1 Timer-A IRQ (KERNAL acks via $DC0D) OR the VIC raster/sprite IRQ
+    // (games/carts ack via $D019) - both level-triggered and masked by the I flag. The VIC
+    // source was previously never delivered, so raster-IRQ music/effects never ran (silent
+    // games). Apply the 6502's 1-instruction interrupt-disable delay: recognise the IRQ using
+    // the I-flag value from BEFORE the current instruction, so CLI/SEI/PLP/RTI take effect one
+    // instruction later (getting this wrong corrupts the KERNAL boot: banner/$E386 hang).
+    if (!(irqShadowSR & SR_INT) && (cia1IRQPending() || vicIRQPending())) cpuIRQ();
+    irqShadowSR = SR;
+
+    // NMI (CIA2 timers / RESTORE) is edge-triggered and NOT masked by the I flag.
+    bool nmiNow = cia2NMIPending();
+    if (nmiNow && !nmiPrev) cpuNMI();
+    nmiPrev = nmiNow;
+
+    // Virtual disk: intercept the KERNAL LOAD entry before it runs the (absent) IEC code.
+    if (PC == 0xF49E && c64LoadTrap()) continue;
+
+    // Boot-autoload (.prg/.d64): once the KERNAL reaches the BASIC main loop (READY), load
+    // the saved image (which queues RUN). One-shot.
+    if (::c64AutoloadPending && PC == 0xA480) {
+      ::c64AutoloadPending = false;
+      ::c64LoadSelected(::selectedC64FileName.c_str());
+    }
+
+    lastPC = PC;
+
+    opcode = read8(PC++);
+    int instrCycles = cycles[opcode];
+    if (instrCycles < 1) instrCycles = 2;
 
     if (!Fast1MhzSpeed)
     {
@@ -237,28 +332,12 @@ void cpuLoop() {
 
       lastCpuCycleCount = cpuCycleCount;
     }
-    
-    // // if (joystick) 
-    // if (joyCount > 10)  {
-    //   processJoystick(0.085);
-    //   joyCount = 0;
-    // }
-    // else
-    //   joyCount++;
-    // Only advance paddle timers when a paddle read is in progress (PTRIG/C070).
-    // Avoids a function call + branch tests on every instruction.
-    if (CgReset0 || CgReset1 || CgReset2 || CgReset3)
-      processJoystick(1);
+    opflags = mos65c02 ? flags65c02[opcode] : flags6502[opcode];
 
-    opflags = activeFlags[opcode];
-    
-    
     // Addressing modes
     switch (opflags & 0x0F) {
       case AD_IMP:
-      case AD_A: 
-        argument_addr = 0xFFFF; 
-        break;
+      case AD_A: argument_addr = 0xFFFF; break;
       case AD_ABS:
         argument_addr = read16(PC);
         PC += 2;
@@ -317,26 +396,8 @@ void cpuLoop() {
         break;
     }
 
-    if (DebugWindow)
-    {
-      while (debugPaused && DebugWindow) {
-        if (debugStep) {
-          debugStep = false;
-          break;
-        }
-        delay(100);
-      }
-      //printCPUStatus();
-      stackdebug();
-    }
-
-    // if (debugAddressBreak != 0 && PC == debugAddressBreak) {
-    //   debugPaused = true;
-    //   clearScreen();
-    //   showHideDebugWindow();
-    // }
-
-  
+    // printCPUStatus();
+    
     //opcodes
     switch (opcode) {
       //ADC
@@ -1011,6 +1072,17 @@ void cpuLoop() {
         PC++;
         break;
     }
-    
+
+    // Advance CIA timers and the VIC raster by this instruction's cycle count.
+    // A PAL scanline is ~63 cycles; render each line as the raster crosses it.
+    ciaTick(instrCycles);
+    rasterCycleAcc += instrCycles;
+    while (rasterCycleAcc >= 63) {
+      rasterCycleAcc -= 63;
+      nextRasterline();               // raster counter + raster IRQ (cheap)
+      if (bitmap) drawRasterline();   // full VIC render only when a framebuffer exists
+    }
   }
 }
+
+} // namespace c64

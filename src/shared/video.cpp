@@ -1,17 +1,21 @@
+#include "../../emu.h"
 
 
-#include "applelogo.h"   // embedded Apple II boot-splash logo (RGB565)
+
+#include "bootlogo.h"   // embedded boot-splash logo (RGB565)
 bool splashActive = true; // true until the boot splash times out or is dismissed
 
-const uint16_t colors[8] = {TFT_BLACK, TFT_GREEN, TFT_PURPLE, TFT_WHITE, TFT_BLACK, tft.color565(255, 20, 0), TFT_SKYBLUE, TFT_WHITE};
-const uint16_t colors16[16] = {tft.color565(0, 0, 0), tft.color565(147, 11, 124), tft.color565(98, 76, 0), tft.color565(249, 86, 29),
-                                       tft.color565(0, 118, 12), tft.color565(126, 126, 126), tft.color565(67, 200, 0), tft.color565(220, 205, 22),
-                                       tft.color565(31, 53, 211), tft.color565(187, 54, 255), tft.color565(126, 126, 126), tft.color565(255, 129, 236),
-                                       tft.color565(7, 168, 224), tft.color565(157, 172, 255), tft.color565(93, 247, 132), tft.color565(255, 255, 255)};
+// colors[] / colors16[] are defined in globals.cpp (after tft, for static-init order).
 int flashCount = 0;
 int touchCount = 0;
 int width = 280;
 int height = 192;
+
+// STATIC stack for the render task: a heap xTaskCreate fails on the fragmented Apple heap
+// (no contiguous 8K block) -> black screen. Static can't fail. Fits the static budget now that
+// the framebuffer shares Apple's RAM buffer (see sharedBigBuf). 8K: SD scan + TFT run here.
+static StaticTask_t renderTaskTCB;
+static StackType_t  renderTaskStack[8192];
 
 void videoSetup()
 {
@@ -21,7 +25,18 @@ void videoSetup()
   tft.invertDisplay(true);
   tft.initDMA();
   tft.fillRect(0, 0, 320, 240, TFT_BLACK);
-  xTaskCreatePinnedToCore(renderLoop, "renderLoop", 4096, NULL, 1, NULL, 0); // core 0; keep core 1 for the CPU
+  TaskHandle_t h = xTaskCreateStaticPinnedToCore(renderLoop, "renderLoop", 8192, NULL, 1,
+                                                 renderTaskStack, &renderTaskTCB, 0); // core 0
+  printLog(h ? "video: renderLoop started" : "video: renderLoop FAILED");
+
+  // The render task (core 0) owns all the settings-window UI, and that includes BLOCKING SD
+  // I/O: directory scans for the file browser and loading disk/PRG/CRT/D64 images. A single
+  // Arduino openNextFile() fopens the entry and can take 1-5+ seconds per call on a slow SD
+  // card / subdirectory (it busy-waits, so it can't yield mid-call). That starves the core-0
+  // idle task and the 5s task watchdog reboots the board mid-SD-transaction (which then wedges
+  // the card -> "Card Mount Failed" until a power cycle). Since core 0 legitimately blocks on
+  // SD by design, drop the idle-task WDT for this core. Core 1 (the CPU core) keeps its WDT.
+  disableCore0WDT();
 }
 
 int red(int color) {
@@ -100,13 +115,13 @@ static void splashService()
     startMs = millis();
     tft.fillScreen(TFT_BLACK);
     tft.setSwapBytes(true);
-    tft.pushImage((320 - APPLE_LOGO_W) / 2, 38, APPLE_LOGO_W, APPLE_LOGO_H, appleLogo);
+    tft.pushImage((320 - BOOT_LOGO_W) / 2, 38, BOOT_LOGO_W, BOOT_LOGO_H, bootLogo);
     tft.setSwapBytes(false);
     tft.setTextDatum(MC_DATUM);
     tft.setTextColor(tft.color565(150, 160, 175), TFT_BLACK);
     tft.drawString("SELECT SYSTEM", 160, 150, 2);
     splashDrawBtn(PLATFORM_APPLE2, "APPLE II", true);
-    splashDrawBtn(PLATFORM_C64,    "C64",      false);
+    splashDrawBtn(PLATFORM_C64,    "C64",      true);
     splashDrawBtn(PLATFORM_NES,    "NES",      false);
     drawn = true;
   }
@@ -114,9 +129,10 @@ static void splashService()
   int16_t tx, ty;
   if (touchRead(&tx, &ty)) {
     int b = splashHitTest(tx, ty);
-    if (b == PLATFORM_APPLE2) splashSelect(PLATFORM_APPLE2);  // only implemented core
-    else if (b < 0)           splashFinish();                 // tapped outside -> boot current
-    // b == C64/NES: not available yet, ignore
+    if (b == PLATFORM_APPLE2)    splashSelect(PLATFORM_APPLE2);
+    else if (b == PLATFORM_C64)  splashSelect(PLATFORM_C64);
+    else if (b < 0)              splashFinish();   // tapped outside -> boot current
+    // b == NES: not available yet, ignore
     return;
   }
   if (millis() - startMs >= SPLASH_MS || Pb0 || Pb1 || Pb2 || Pb3) splashFinish();
@@ -149,6 +165,16 @@ void renderLoop(void *pvParameters)
       optionsUiRender();
       Vertical_blankingOn_Off = true;
       vTaskDelay(pdMS_TO_TICKS(15));
+      continue;
+    }
+
+    // C64 core renders its own framebuffer (push to TFT); skip the Apple raster.
+    if (currentPlatform == PLATFORM_C64)
+    {
+      c64RenderFrame();                  // text screen (top 14 rows when the OSK is open)
+      if (oskActive()) oskRender();      // touch keyboard owns the bottom of the screen
+      Vertical_blankingOn_Off = true;
+      vTaskDelay(pdMS_TO_TICKS(10));
       continue;
     }
 

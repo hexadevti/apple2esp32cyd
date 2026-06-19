@@ -1,3 +1,5 @@
+#include "../../emu.h"
+
 void epromSetup() {
     
   EEPROM.begin(EEPROM_SIZE);
@@ -36,6 +38,17 @@ void epromSetup() {
   volume = EEPROM.readChar(VolumeEEPROMaddress);
   currentPlatform = EEPROM.readChar(PlatformEEPROMaddress);
   if (currentPlatform > PLATFORM_NES) currentPlatform = PLATFORM_APPLE2;  // unset/garbage -> default
+
+  // C64 settings (validated so old/uninitialised EEPROM doesn't enable surprises).
+  c64Autoload = (EEPROM.readChar(C64AutoloadEEPROMaddress) == 1);
+  joyPort = EEPROM.readChar(JoyPortEEPROMaddress);
+  if (joyPort != 1 && joyPort != 2) joyPort = 2;
+  readStringFromEEPROM(C64FileNameEEPROMaddress, &selectedC64FileName);
+  if (selectedC64FileName.length() == 0 || selectedC64FileName.length() > 120 ||
+      selectedC64FileName[0] != '/') {
+    selectedC64FileName = "";
+    c64Autoload = false;
+  }
     
   if (HdDisk) {
     int size = readStringFromEEPROM(HdFileNameEEPROMaddress, &selectedHdFileName);
@@ -101,8 +114,11 @@ void saveEEPROM() {
 // survive a reboot even without using "Save & Reboot".
 void saveConfig() {
     saveEEPROM();
+    EEPROM.writeChar(C64AutoloadEEPROMaddress, c64Autoload ? 1 : 0);
+    EEPROM.writeChar(JoyPortEEPROMaddress, joyPort);
     writeStringToEEPROM(HdFileNameEEPROMaddress, selectedHdFileName);
     writeStringToEEPROM(DiskFileNameEEPROMaddress, selectedDiskFileName);
+    writeStringToEEPROM(C64FileNameEEPROMaddress, selectedC64FileName);
     EEPROM.commit();
   }
   

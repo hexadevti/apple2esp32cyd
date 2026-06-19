@@ -1,3 +1,5 @@
+#include "../../emu.h"
+
 // optionsui.ino - Modern, touch-driven settings window.
 //
 // Replaces the old Apple II text-grid options screen with a styled, clickable UI
@@ -49,21 +51,65 @@ static bool optionsUiWaitRelease = false;
 // border. Order: 0..5 toggle cards, then volume, file list, MOUNT, SAVE & REBOOT.
 // Toggle grid slots 6 and 7 (bottom-right) are intentionally left empty for two
 // future buttons; navigation skips them.
-#define OUI_TG_COUNT   6
-#define OUI_FOC_VOL    6
-#define OUI_FOC_FILES  7
-#define OUI_FOC_MOUNT  8
-#define OUI_FOC_REBOOT 9
-#define OUI_FOC_COUNT  10
+#define OUI_TG_COUNT      6
+#define OUI_FOC_VOL       6
+#define OUI_FOC_FILES     7
+#define OUI_FOC_MOUNT     8   // Apple: MOUNT          / C64: LOAD & RUN
+#define OUI_FOC_MNTREBOOT 9   // Apple: MOUNT + REBOOT / C64: (unused)
+#define OUI_FOC_REBOOT    10  // both:  REBOOT
+#define OUI_FOC_COUNT     11
 static int optionsUiFocus = 0;
+
+// The settings window is shared by every platform. These accessors pick the active
+// file list / selection so the file browser, scrolling and actions are platform-aware
+// without duplicating the whole UI.
+static bool ouiIsC64() { return currentPlatform == PLATFORM_C64; }
+
+static std::vector<std::string> &ouiFiles()
+{
+  if (ouiIsC64()) return c64Files;
+  return HdDisk ? hdFiles : diskFiles;
+}
+
+static std::string ouiSel()
+{
+  if (ouiIsC64()) return std::string(selectedC64FileName.c_str());
+  return std::string((HdDisk ? selectedHdFileName : selectedDiskFileName).c_str());
+}
+
+// A browser entry is a directory if it's the ".." up-entry or ends with "/".
+static bool ouiIsDir(const std::string &e) { return e == ".." || (!e.empty() && e.back() == '/'); }
+
+// Display label for a browser entry: ".." for up, "[dir]" for a subdirectory, else the
+// file's basename (path stripped).
+static std::string ouiDisplayName(const std::string &e)
+{
+  if (e == "..") return "..";
+  bool dir = !e.empty() && e.back() == '/';
+  std::string p = e;
+  if (dir) p.pop_back();
+  size_t sl = p.find_last_of('/');
+  std::string base = (sl == std::string::npos) ? p : p.substr(sl + 1);
+  return dir ? ("[" + base + "]") : base;
+}
+
+// Navigate the C64 browser into a directory entry (or up via "..") and refresh the list.
+static void ouiBrowse(const std::string &entry)
+{
+  if (entry == "..") c64BrowseUp();
+  else               c64BrowseEnter(entry.c_str());
+  shownFile = 0xff; firstShowFile = 0;
+  optionsUiSyncSelection();
+  optionsUiDirty = true;
+}
 
 // ---------------------------------------------------------------------------
 // Selection / scrolling helpers
 // ---------------------------------------------------------------------------
 void optionsUiSyncSelection()
 {
-  std::vector<std::string> &files = HdDisk ? hdFiles : diskFiles;
-  std::string sel = (HdDisk ? selectedHdFileName : selectedDiskFileName).c_str();
+  std::vector<std::string> &files = ouiFiles();
+  std::string sel = ouiSel();
   int idx = -1;
   for (int i = 0; i < (int)files.size(); i++)
     if (files[i] == sel) { idx = i; break; }
@@ -110,8 +156,25 @@ static void ouiDrawToggle(int idx, const char *label, const char *value, uint16_
   tft.drawString(value, x + 8, y + OUI_TG_H - 5, 2);
 }
 
+// Blank a toggle slot (so stale Apple labels don't linger on the C64 screen).
+static void ouiClearToggle(int idx)
+{
+  int col = idx % 4, row = idx / 4;
+  int x = col * OUI_TG_W, y = OUI_TG_TOP + row * OUI_TG_H;
+  tft.fillRect(x, y, OUI_TG_W, OUI_TG_H, OUI_BG);
+}
+
 static void ouiDrawToggles()
 {
+  if (ouiIsC64()) {
+    ouiDrawToggle(0, "SOUND",    sound ? "ON" : "MUTE",          OUI_TXT);
+    ouiDrawToggle(1, "JOYSTICK", joystick ? "ON" : "OFF",        OUI_TXT);
+    ouiDrawToggle(2, "VIDEO",    videoColor ? "COLOR" : "MONO",  OUI_TXT);
+    ouiDrawToggle(3, "AUTOLOAD", c64Autoload ? "ON" : "OFF",     OUI_TXT);
+    ouiDrawToggle(4, "JOY PORT", joyPort == 1 ? "1" : "2",       OUI_TXT);
+    for (int i = 5; i < 8; i++) ouiClearToggle(i);
+    return;
+  }
   ouiDrawToggle(0, "DEVICE",   HdDisk ? "HD" : "DISK",          OUI_TXT);
   ouiDrawToggle(1, "MACHINE",  AppleIIe ? "IIe" : "II+",        OUI_TXT);
   ouiDrawToggle(2, "SPEED",    Fast1MhzSpeed ? "FAST" : "1MHz", OUI_TXT);
@@ -145,13 +208,14 @@ static void ouiDrawVolume()
 
 static void ouiDrawFiles()
 {
-  std::vector<std::string> &files = HdDisk ? hdFiles : diskFiles;
-  std::string sel = (HdDisk ? selectedHdFileName : selectedDiskFileName).c_str();
+  std::vector<std::string> &files = ouiFiles();
+  std::string sel = ouiSel();
 
   // header
   tft.fillRect(0, OUI_FB_TOP, 320, OUI_FB_HDR_H, OUI_BG);
   char hdr[40];
-  sprintf(hdr, "%s IMAGES  (%d)", HdDisk ? "HD" : "DISK", (int)files.size());
+  sprintf(hdr, "%s  (%d)", ouiIsC64() ? "PRG/D64/CRT" : (HdDisk ? "HD IMAGES" : "DISK IMAGES"),
+          (int)files.size());
   tft.setTextDatum(BL_DATUM);
   tft.setTextColor(OUI_LBL, OUI_BG);
   tft.drawString(hdr, 7, OUI_FB_TOP + OUI_FB_HDR_H - 2, 1);
@@ -174,11 +238,13 @@ static void ouiDrawFiles()
       tft.fillRect(0, ry, 300, OUI_FB_ROWH, rowbg);
       if (mounted) tft.fillRect(0, ry, 3, OUI_FB_ROWH, OUI_ON);
 
-      std::string nm = files[idx];
-      if (!nm.empty() && nm[0] == '/') nm = nm.substr(1);
+      std::string nm = ouiIsC64() ? ouiDisplayName(files[idx]) : files[idx];
+      if (!ouiIsC64() && !nm.empty() && nm[0] == '/') nm = nm.substr(1);
       if (nm.size() > 46) nm = nm.substr(0, 43) + "...";
       tft.setTextDatum(ML_DATUM);
-      tft.setTextColor(selected ? OUI_TXT : tft.color565(200, 205, 215), rowbg);
+      uint16_t txtcol = ouiIsC64() && ouiIsDir(files[idx]) ? tft.color565(120, 200, 255)
+                      : (selected ? OUI_TXT : tft.color565(200, 205, 215));
+      tft.setTextColor(txtcol, rowbg);
       tft.drawString(nm.c_str(), 9, ry + OUI_FB_ROWH / 2, 1);
     }
   }
@@ -191,26 +257,51 @@ static void ouiDrawFiles()
   if (optionsUiFocus == OUI_FOC_FILES) ouiFocusRing(0, OUI_FB_LIST, 300, listH, 2);
 }
 
+// Called from the (slow) directory scan in the render task: shows a "Loading… N" bar in the
+// file-list area and yields (vTaskDelay) so the scan doesn't block the task / trip the watchdog.
+void uiDirScanProgress(int count)
+{
+  int y = OUI_FB_LIST, listH = OUI_FB_ROWS * OUI_FB_ROWH;
+  tft.fillRect(0, y, 320, listH, OUI_CARD2);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(OUI_TXT, OUI_CARD2);
+  char s[24];
+  sprintf(s, "Loading...  %d", count);
+  tft.drawString(s, 160, y + listH / 2 - 9, 2);
+  int bx = 24, bw = 272, bh = 8, by = y + listH / 2 + 6;
+  tft.drawRoundRect(bx, by, bw, bh, 3, OUI_BORDER);
+  int fw = count >= 250 ? bw - 2 : (bw - 2) * count / 250;     // bar fills toward the 250 cap
+  if (fw > 0) tft.fillRoundRect(bx + 1, by + 1, fw, bh - 2, 2, OUI_SEL);
+  vTaskDelay(1);   // yield: feed the watchdog + let the idle task run during a long scan
+}
+
+// Draw one labelled action button (rounded, optional focus ring).
+static void ouiActBtn(int x, int w, const char *label, uint16_t face, uint16_t txt, int focusId)
+{
+  int y = OUI_ACT_TOP, h = OUI_ACT_H;
+  tft.fillRoundRect(x, y, w, h, 6, face);
+  tft.drawRoundRect(x, y, w, h, 6, OUI_BORDER);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(txt, face);
+  tft.drawString(label, x + w / 2, y + h / 2, 2);
+  if (optionsUiFocus == focusId) ouiFocusRing(x, y, w, h, 6);
+}
+
 static void ouiDrawActions()
 {
-  std::vector<std::string> &files = HdDisk ? hdFiles : diskFiles;
-  bool canMount = !files.empty();
-  int y = OUI_ACT_TOP, h = OUI_ACT_H;
-
+  bool canMount = !ouiFiles().empty();
   uint16_t mc = canMount ? OUI_MOUNT : OUI_CARD2;
-  tft.fillRoundRect(6, y, 120, h, 6, mc);
-  tft.drawRoundRect(6, y, 120, h, 6, OUI_BORDER);
-  tft.setTextDatum(MC_DATUM);
-  tft.setTextColor(canMount ? OUI_TXT : OUI_LBL, mc);
-  tft.drawString("MOUNT", 66, y + h / 2, 2);
+  uint16_t mt = canMount ? OUI_TXT : OUI_LBL;
 
-  tft.fillRoundRect(132, y, 182, h, 6, OUI_REBOOT);
-  tft.drawRoundRect(132, y, 182, h, 6, OUI_BORDER);
-  tft.setTextColor(OUI_TXT, OUI_REBOOT);
-  tft.drawString("SAVE & REBOOT", 223, y + h / 2, 2);
-
-  if (optionsUiFocus == OUI_FOC_MOUNT)  ouiFocusRing(6, y, 120, h, 6);
-  if (optionsUiFocus == OUI_FOC_REBOOT) ouiFocusRing(132, y, 182, h, 6);
+  if (ouiIsC64()) {                       // C64: LOAD & RUN + REBOOT
+    ouiActBtn(6,   120, "LOAD & RUN", mc,         mt,      OUI_FOC_MOUNT);
+    ouiActBtn(132, 182, "REBOOT",     OUI_REBOOT, OUI_TXT, OUI_FOC_REBOOT);
+    return;
+  }
+  // Apple II: MOUNT / M+REBOOT / REBOOT
+  ouiActBtn(4,   102, "MOUNT",    mc,         mt,      OUI_FOC_MOUNT);
+  ouiActBtn(109, 102, "M+REBOOT", mc,         mt,      OUI_FOC_MNTREBOOT);
+  ouiActBtn(214, 102, "REBOOT",   OUI_REBOOT, OUI_TXT, OUI_FOC_REBOOT);
 }
 
 static void ouiDrawTitle()
@@ -218,7 +309,8 @@ static void ouiDrawTitle()
   tft.fillRect(0, 0, 320, OUI_TITLE_H, OUI_TITLE);
   tft.setTextDatum(ML_DATUM);
   tft.setTextColor(OUI_TXT, OUI_TITLE);
-  tft.drawString("APPLE II  SETTINGS", 10, OUI_TITLE_H / 2, 2);
+  tft.drawString(ouiIsC64() ? "COMMODORE 64  SETTINGS" : "APPLE II  SETTINGS",
+                 10, OUI_TITLE_H / 2, 2);
   int cw = OUI_TITLE_H, cx = 320 - cw;
   tft.fillRect(cx, 0, cw, OUI_TITLE_H, OUI_RED);
   tft.setTextDatum(MC_DATUM);
@@ -243,6 +335,18 @@ void optionsUiRender()
 // ---------------------------------------------------------------------------
 static void ouiToggle(int idx)
 {
+  if (ouiIsC64()) {                       // C64 grid: SOUND/JOYSTICK/VIDEO/AUTOLOAD/JOY PORT
+    switch (idx) {
+      case 0: sound = !sound;             break;
+      case 1: joystick = !joystick;       break;
+      case 2: videoColor = !videoColor;   break;
+      case 3: c64Autoload = !c64Autoload; break;
+      case 4: joyPort = (joyPort == 2) ? 1 : 2; break;
+      default: return;
+    }
+    optionsUiDirty = true;
+    return;
+  }
   switch (idx) {
     case 0:
       HdDisk = !HdDisk;
@@ -264,7 +368,7 @@ static void ouiToggle(int idx)
 
 static void ouiScroll(int dir)
 {
-  std::vector<std::string> &files = HdDisk ? hdFiles : diskFiles;
+  std::vector<std::string> &files = ouiFiles();
   int maxStart = (int)files.size() - OUI_FB_ROWS;
   if (maxStart < 0) maxStart = 0;
   int fs = (int)firstShowFile + dir;
@@ -276,18 +380,34 @@ static void ouiScroll(int dir)
 
 static void ouiMount()
 {
-  std::vector<std::string> &files = HdDisk ? hdFiles : diskFiles;
+  std::vector<std::string> &files = ouiFiles();
   if (files.empty()) return;
+  if (ouiIsC64()) {                       // C64: load the highlighted image (.prg/.d64/.crt) + run
+    if (shownFile >= files.size()) return;
+    if (ouiIsDir(files[shownFile])) { ouiBrowse(files[shownFile]); return; }  // dir -> navigate
+    selectedC64FileName = files[shownFile].c_str();
+    c64LoadSelected(selectedC64FileName.c_str());
+    showHideOptionsWindow();              // close -> CPU resumes -> BASIC autoruns
+    return;
+  }
   if (HdDisk) setHdFile(); else setDiskFile();
   diskChanged = true;
   showHideOptionsWindow();   // mount selected image and close
 }
 
-static void ouiSaveReboot()
+// Apple "MOUNT + REBOOT": apply the highlighted image as the boot device, save, then restart.
+static void ouiMountReboot()
 {
-  // Apply the highlighted image to the selected device, persist everything (toggles,
-  // volume, both filenames), then reboot so the chosen image is mounted on next boot.
-  if (HdDisk) setHdFile(); else setDiskFile();
+  if (ouiIsC64()) return;                 // C64 has no such button
+  if (!ouiFiles().empty()) { if (HdDisk) setHdFile(); else setDiskFile(); }
+  saveConfig();
+  ESP.restart();
+}
+
+// "REBOOT" button (both platforms): persist settings, then restart -> the boot splash, where
+// you can switch platforms.
+static void ouiReboot()
+{
   saveConfig();
   ESP.restart();
 }
@@ -311,7 +431,7 @@ void optionsUiAdjust(int dir)         // dir: -1 = up, +1 = down
     return;
   }
   if (f == OUI_FOC_FILES) {
-    std::vector<std::string> &files = HdDisk ? hdFiles : diskFiles;
+    std::vector<std::string> &files = ouiFiles();
     if (files.empty()) return;
     int idx = (int)shownFile + (dir < 0 ? -1 : 1);
     if (idx < 0) idx = 0;
@@ -328,9 +448,10 @@ void optionsUiActivate()              // joystick fire button on the focused con
 {
   int f = optionsUiFocus;
   if (f >= 0 && f < OUI_TG_COUNT) ouiToggle(f);
-  else if (f == OUI_FOC_FILES)  ouiMount();
-  else if (f == OUI_FOC_MOUNT)  ouiMount();
-  else if (f == OUI_FOC_REBOOT) ouiSaveReboot();
+  else if (f == OUI_FOC_FILES)     ouiMount();
+  else if (f == OUI_FOC_MOUNT)     ouiMount();
+  else if (f == OUI_FOC_MNTREBOOT) ouiMountReboot();
+  else if (f == OUI_FOC_REBOOT)    ouiReboot();
   // FOC_VOL: nothing (adjust with up/down)
 }
 
@@ -358,17 +479,26 @@ static void ouiHandleTap(int16_t x, int16_t y)
   if (y >= OUI_FB_LIST && y < OUI_FB_LIST + listH) {
     if (x >= 302) { ouiScroll(y < OUI_FB_LIST + listH / 2 ? -1 : 1); return; }
     if (x < 300) {
-      std::vector<std::string> &files = HdDisk ? hdFiles : diskFiles;
+      std::vector<std::string> &files = ouiFiles();
       int idx = firstShowFile + (y - OUI_FB_LIST) / OUI_FB_ROWH;
-      if (idx < (int)files.size()) { shownFile = (uint8_t)idx; optionsUiDirty = true; }
+      if (idx < (int)files.size()) {
+        if (ouiIsC64() && ouiIsDir(files[idx])) ouiBrowse(files[idx]);   // enter dir / go up
+        else { shownFile = (uint8_t)idx; optionsUiDirty = true; }
+      }
       return;
     }
   }
 
   // action buttons
   if (y >= OUI_ACT_TOP && y < OUI_ACT_TOP + OUI_ACT_H) {
-    if (x >= 6 && x < 126) ouiMount();
-    else if (x >= 132 && x < 314) ouiSaveReboot();
+    if (ouiIsC64()) {                       // LOAD & RUN (6..126) | REBOOT (132..314)
+      if (x >= 6 && x < 126)        ouiMount();
+      else if (x >= 132 && x < 314) ouiReboot();
+    } else {                                // MOUNT (4..106) | M+REBOOT (109..211) | REBOOT (214..316)
+      if (x >= 4 && x < 106)        ouiMount();
+      else if (x >= 109 && x < 211) ouiMountReboot();
+      else if (x >= 214 && x < 316) ouiReboot();
+    }
   }
 }
 
@@ -390,6 +520,7 @@ void optionsUiPoll()
 
 void optionsUiOpen()
 {
+  if (ouiIsC64() && c64Files.empty()) loadC64FilesSync();   // populate the .prg browser
   optionsUiSyncSelection();
   optionsUiFocus       = 0;
   optionsUiFirstDraw   = true;

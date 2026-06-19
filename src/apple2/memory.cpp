@@ -1,6 +1,9 @@
+#include "../../emu.h"
+
 void memoryAlloc() {
   showFreeMem();
-  ram = (unsigned char*)malloc(0xc000 * sizeof(unsigned char));
+  ram = sharedBigBuf;   // main RAM = the shared static buffer (the C64 framebuffer when on C64);
+                        // frees ~48K of heap so the render/joystick/disk tasks can allocate.
   auxram = (unsigned char*)malloc(0xc000 * sizeof(unsigned char));
   memoryBankSwitchedRAM1 = (unsigned char*)malloc(0x2000 * sizeof(unsigned char));
   memoryBankSwitchedRAM2_1 = (unsigned char*)malloc(0x1000 * sizeof(unsigned char));

@@ -1,4 +1,6 @@
-char processSoftSwitches(ushort address, char value, bool Read_Write = true)
+#include "../../emu.h"
+
+char processSoftSwitches(ushort address, char value, bool Read_Write)   // default in proto.h
 {
   switch (address)
   {

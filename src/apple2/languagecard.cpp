@@ -1,3 +1,5 @@
+#include "../../emu.h"
+
 
 void languagecardWrite(ushort address, byte b)
 {

@@ -1,3 +1,7 @@
+#include "../../emu.h"
+
+static void analogJoystickTask(void *pvParameters);   // defined below; used by joystickSetup
+
 void processJoystick(float speedAdjust)
 {
     if (CgReset0)
@@ -62,7 +66,7 @@ void joystickSetup()
     pPb1 = Pb1;
     pPb2 = Pb2;
     pPb3 = Pb3;
-    xTaskCreatePinnedToCore(analogJoystickTask, "analogJoystickTask", 4096, NULL, 3, NULL, 0); // core 0; keep core 1 for the CPU
+    xTaskCreatePinnedToCore(analogJoystickTask, "analogJoystickTask", 4096, NULL, 3, NULL, 0); // core 0
 }
 
 static void buttonDown(uint8_t btn)
@@ -366,15 +370,23 @@ static void analogJoystickTask(void *pvParameters)
         else if (analogX < joyCenterX - joyThresh) joyY = 0;
         else                                       joyY = 1;
 
-        // Diagnostic: raw ADC + rest centers + decoded direction, throttled to ~4 Hz.
+        (void)joyRawX; (void)joyRawY;   // (joystick raw-value diagnostic removed)
+
+        // C64: map the 8-way stick + fire onto joystick port 2 (CIA1 $DC00). Active-low:
+        // bit0=up, bit1=down, bit2=left, bit3=right, bit4=fire. Only while JOYSTICK is on
+        // and the menu is closed; otherwise release all (0xff).
+        if (currentPlatform == PLATFORM_C64)
         {
-            static unsigned long joyDbgT = 0;
-            if (millis() - joyDbgT > 250) {
-                joyDbgT = millis();
-                Serial.printf("JOY rawX(4)=%4d rawY(35)=%4d btn(34)=%4d | aX=%4d aY=%4d | cX=%4d cY=%4d | LR=%d UD=%d\n",
-                              joyRawX, joyRawY, digital_button1, analogX, analogY,
-                              joyCenterX, joyCenterY, joyY, joyX);
+            uint8_t m = 0xff;
+            if (joystick && !OptionsWindow)
+            {
+                if (joyX == 0) m &= ~0x01;   // up
+                if (joyX == 2) m &= ~0x02;   // down
+                if (joyY == 0) m &= ~0x04;   // left
+                if (joyY == 2) m &= ~0x08;   // right
+                if (Pb0)       m &= ~0x10;   // fire (button 0)
             }
+            c64SetJoystick(m);
         }
 
         if (pJoyX != joyX)

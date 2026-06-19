@@ -1,3 +1,5 @@
+#include "../../emu.h"
+
 #include "driver/dac.h"
 
 // The Apple II speaker is a 1-bit toggle at $C030. We output it through the ESP32

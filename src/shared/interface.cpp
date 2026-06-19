@@ -1,3 +1,5 @@
+#include "../../emu.h"
+
 #include <cstring>
 #include <iostream>
 
@@ -171,7 +173,7 @@ void setCursor(uint8_t x, uint8_t y) {
   cursorY = y;
 }
 
-void print(const char * txt, bool inverted = false, uint8_t color = 0xf0) {
+void print(const char * txt, bool inverted, uint8_t color) {   // defaults in proto.h
   size_t length = std::strlen(txt);
 
   uint16_t addr = cursorY * 45 + cursorX;
@@ -204,8 +206,8 @@ uint16_t getAddressValue() {
 }
 
 void clearScreen() {
-  memset(menuScreen, 0xa0, 0x546 * sizeof(unsigned char));
-  memset(menuColor, 0x00, 0x546 * sizeof(unsigned char));
+  if (menuScreen) memset(menuScreen, 0xa0, 0x546 * sizeof(unsigned char));
+  if (menuColor)  memset(menuColor, 0x00, 0x546 * sizeof(unsigned char));
   clearScr = true;
 }
 

@@ -1,3 +1,5 @@
+#include "../../emu.h"
+
 bool lastMouseButton = false;
 
 char mouseSoftSwitchesRead(ushort address) {

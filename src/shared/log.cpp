@@ -1,3 +1,5 @@
+#include "../../emu.h"
+
 void logSetup() {
     Serial.begin(115200);
 }

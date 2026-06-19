@@ -1,3 +1,5 @@
+#include "../../emu.h"
+
 static SPIClass hspi { HSPI };
 
 void FSSetup()
@@ -8,7 +10,9 @@ void FSSetup()
   
   int sdMountRetry = 0;
       hspi.begin(SD_SCK_PIN, SD_MISO_PIN, SD_MOSI_PIN, SD_CS_PIN);
-      while (!FSTYPE.begin(SD_CS_PIN, hspi) && sdMountRetry < 10) {
+      // Run the SD bus at SD_SPI_HZ (20MHz) instead of the begin() default of 4MHz: directory
+      // reads (esp. nested opendir) were the bottleneck after the per-entry fopen was removed.
+      while (!FSTYPE.begin(SD_CS_PIN, hspi, SD_SPI_HZ) && sdMountRetry < 10) {
         printLog("Card Mount Failed");
         delay(100);
         sdMountRetry++;
