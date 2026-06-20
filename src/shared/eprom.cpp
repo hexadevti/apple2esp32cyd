@@ -37,7 +37,7 @@ void epromSetup() {
   dacSound = EEPROM.readBool(dacSoundEEPROMaddress);
   volume = EEPROM.readChar(VolumeEEPROMaddress);
   currentPlatform = EEPROM.readChar(PlatformEEPROMaddress);
-  if (currentPlatform > PLATFORM_NES) currentPlatform = PLATFORM_APPLE2;  // unset/garbage -> default
+  if (currentPlatform > PLATFORM_ATARI) currentPlatform = PLATFORM_APPLE2;  // unset/garbage -> default
 
   // C64 settings (validated so old/uninitialised EEPROM doesn't enable surprises).
   c64Autoload = (EEPROM.readChar(C64AutoloadEEPROMaddress) == 1);
@@ -55,6 +55,12 @@ void epromSetup() {
   if (selectedNesFileName.length() == 0 || selectedNesFileName.length() > 120 ||
       selectedNesFileName[0] != '/')
     selectedNesFileName = "";
+
+  // Atari 2600: last-loaded ROM, auto-loaded on boot (validated; garbage -> none).
+  readStringFromEEPROM(AtariFileNameEEPROMaddress, &selectedAtariFileName);
+  if (selectedAtariFileName.length() == 0 || selectedAtariFileName.length() > 120 ||
+      selectedAtariFileName[0] != '/')
+    selectedAtariFileName = "";
     
   if (HdDisk) {
     int size = readStringFromEEPROM(HdFileNameEEPROMaddress, &selectedHdFileName);
@@ -126,6 +132,7 @@ void saveConfig() {
     writeStringToEEPROM(DiskFileNameEEPROMaddress, selectedDiskFileName);
     writeStringToEEPROM(C64FileNameEEPROMaddress, selectedC64FileName);
     writeStringToEEPROM(NesFileNameEEPROMaddress, selectedNesFileName);
+    writeStringToEEPROM(AtariFileNameEEPROMaddress, selectedAtariFileName);
     EEPROM.commit();
   }
   

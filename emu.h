@@ -55,6 +55,7 @@ extern std::vector<std::string> hdFiles;
 extern std::vector<std::string> diskFiles;
 extern std::vector<std::string> c64Files;
 extern std::vector<std::string> nesFiles;
+extern std::vector<std::string> atariFiles;   // Atari 2600 .a26/.bin ROMs on SD
 
 // Board Pins
 #define SD_SCK_PIN 18
@@ -137,7 +138,7 @@ extern uint8_t volume;
 // Target system for the multi-platform emulator. Apple II is implemented; C64 and
 // NES are placeholders selectable from the boot splash (see src/shared/video.cpp
 // splashService and the dispatch in apple2esp32cyd.ino). Persisted in EEPROM.
-enum Platform : uint8_t { PLATFORM_APPLE2 = 0, PLATFORM_C64 = 1, PLATFORM_NES = 2 };
+enum Platform : uint8_t { PLATFORM_APPLE2 = 0, PLATFORM_C64 = 1, PLATFORM_NES = 2, PLATFORM_ATARI = 3 };
 extern uint8_t currentPlatform;
 
 // Log Config
@@ -161,10 +162,12 @@ extern int logLineCount;
 #define HdFileNameEEPROMaddress 256
 #define C64FileNameEEPROMaddress 384   // C64: last-loaded .prg/.d64/.crt (for autoload)
 #define NesFileNameEEPROMaddress 512   // NES: last-loaded .nes (auto-loaded on boot)
+#define AtariFileNameEEPROMaddress 640 // Atari: last-loaded .a26/.bin (auto-loaded on boot)
 extern String selectedDiskFileName;
 extern String selectedHdFileName;
 extern String selectedC64FileName;
 extern String selectedNesFileName;   // NES: currently-loaded ROM (settings file browser marker)
+extern String selectedAtariFileName; // Atari: currently-loaded ROM (settings file browser marker)
 extern bool c64Autoload;          // C64: auto-load selectedC64FileName on boot
 extern uint8_t joyPort;           // C64: joystick port (1 or 2)
 extern String NewDeviceConfig;

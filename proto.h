@@ -172,6 +172,16 @@ void nesApuSetup();                       // NES APU audio (I2S DAC GPIO26), cal
 bool nesLoadSelected(const char *path);   // settings: load a .nes ROM + reset the NES
 void nesScanFiles();                      // settings: rescan SD root for *.nes
 
+// Atari 2600 core entry points (src/atari/atari.cpp), called by the platform dispatch
+void atariSetup();
+void atariLoop();
+void atariRenderFrame();
+void atariSetInput(uint8_t dirBits, bool fire, bool select, bool reset);  // stick + Fire/Select/Reset
+bool atariRenderLoadWarning();            // startup ROM-skip warning overlay (true while showing)
+void atariAudioSetup();                   // TIA audio (I2S DAC GPIO26), called from setup()
+bool atariLoadSelected(const char *path); // settings: load a .a26/.bin ROM + reset the 2600
+void atariScanFiles();                    // settings: rescan SD root for *.a26 / *.bin
+
 // SID sound (src/c64/c64_sid.cpp)
 void sidSetup();                       // init the 3-voice synth + I2S DAC output task
 void sidWrite(uint8_t reg, uint8_t val);

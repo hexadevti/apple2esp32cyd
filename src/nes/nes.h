@@ -80,7 +80,7 @@ extern volatile bool irqLine;        // mapper IRQ line (MMC3); level-held until
 extern volatile bool nesResetReq;    // settings: reset CPU/PPU after loading a new ROM
 extern int  dmaStallCycles;          // extra CPU cycles from an OAM DMA ($4014)
 extern volatile uint32_t nesFrameCount;   // PPU frames completed (FPS diagnostic)
-extern char loadWarn[256];                // startup ROM-skip warning text (see nes_cart.cpp)
+extern char *loadWarn;                     // startup ROM-skip warning text (malloc'd; see nes_cart.cpp)
 void    ppuReset();
 void    ppuStep(int cpuCycles);      // advance the PPU by cpuCycles*3 dots
 extern int dotAcc;                   // PPU dot accumulator (exposed so cpuLoop inlines ppuStep)

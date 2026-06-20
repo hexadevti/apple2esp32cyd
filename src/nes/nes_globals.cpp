@@ -39,7 +39,7 @@ volatile uint32_t nesFrameCount = 0;     // bumped each completed PPU frame (FPS
 
 // On-screen startup warning: one short line per ROM skipped at load time (unsupported mapper /
 // too big for RAM). Shown by the render loop for a few seconds after boot, then cleared.
-char loadWarn[256] = {0};
+char *loadWarn = nullptr;                // malloc'd in nesSetup (not static BSS — DRAM budget is full)
 
 // ---- NES master palette (NTSC 2C02), source RGB888 -> RGB565 at compile time ----
 // constexpr so there is no static-init-order dependency on `tft` (the C64 palette uses literal

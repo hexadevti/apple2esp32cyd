@@ -1,16 +1,15 @@
-// Ricoh 2A03 CPU core — the same proven µ6502 (Damian Peckett base) used by the Apple II
-// and C64 cores, copied into namespace nes with nes::read8/write8 as the bus. The 2A03 is an
-// NMOS 6502 with decimal mode disabled; the decimal ADC/SBC paths below are gated on the D
-// flag, which NES games CLD at boot and never set, so they are effectively unused.
+// MOS 6507 CPU core — the 6507 is an NMOS 6502 in a 28-pin package exposing only A0-A12 (the
+// 2600 has no interrupts wired: no NMI, and IRQ/RDY are used only by WSYNC). Same proven µ6502
+// (Damian Peckett base) used by the Apple II / C64 / NES cores, copied into namespace atari with
+// atari::read8/write8 as the bus. Decimal mode exists but 2600 games CLD and never use it.
 //
-// The NES cpuLoop steps the PPU 3 dots per CPU cycle, services the VBlank NMI edge, and adds
-// the OAM-DMA stall ($4014) to the cycle budget. No IRQ source exists in phase 1 (mapper 0
-// has none and the APU is stubbed), so the IRQ line is never asserted.
+// The atari cpuLoop steps the TIA 3 dots per CPU cycle and ticks the RIOT interval timer after
+// each instruction; a WSYNC ($02) write halts the CPU to the end of the current scanline.
 
 #include "../../emu.h"
-#include "nes.h"
+#include "atari.h"
 
-namespace nes {
+namespace atari {
 
 // Address Modes
 #define AD_IMP  0x01
@@ -55,8 +54,10 @@ namespace nes {
 
 #define STP_BASE 0x100
 
-// high nibble = SR flags affected, low nibble = address mode (NMOS 6502 official set)
-static const DRAM_ATTR unsigned char flags6502[] = {
+// high nibble = SR flags affected, low nibble = address mode (NMOS 6502 official set).
+// Kept in flash (no DRAM_ATTR): the static DRAM segment (dram0_0_seg) is full — adding these 512B
+// of tables overflows it by 184B. The 2600's slow clock tolerates the cached flash fetch.
+static const unsigned char flags6502[] = {
   AD_IMP, AD_INDX, UNDF, UNDF, UNDF, FL_ZN | AD_ZPG, FL_ZNC | AD_ZPG, UNDF, AD_IMP, FL_ZN | AD_IMM, FL_ZNC | AD_A, UNDF, UNDF, FL_ZN | AD_ABS, FL_ZNC | AD_ABS, UNDF,
   AD_REL, FL_ZN | AD_INDY, UNDF, UNDF, UNDF, FL_ZN | AD_ZPGX, FL_ZNC | AD_ZPGX, UNDF, AD_IMP, FL_ZN | AD_ABSY, UNDF, UNDF, UNDF, FL_ZN | AD_ABSX, FL_ZNC | AD_ABSX, UNDF,
   AD_ABS, FL_ZN | AD_INDX, UNDF, UNDF, FL_Z | AD_ZPG, FL_ZN | AD_ZPG, FL_ZNC | AD_ZPG, UNDF, AD_IMP, FL_ZN | AD_IMM, FL_ZNC | AD_A, UNDF, FL_Z | AD_ABS, FL_ZN | AD_ABS, FL_ZNC | AD_ABS, UNDF,
@@ -75,9 +76,7 @@ static const DRAM_ATTR unsigned char flags6502[] = {
   AD_REL, FL_ALL | AD_INDY, UNDF, UNDF, UNDF, FL_ALL | AD_ZPGX, FL_ZN | AD_ZPGX, UNDF, AD_IMP, FL_ALL | AD_ABSY, UNDF, UNDF, UNDF, FL_ALL | AD_ABSX, FL_ZN | AD_ABSX, UNDF
 };
 
-// uint8_t (not int): the cycle counts are all 0-7, so a byte table is 4x smaller and stays in
-// fast DRAM — freeing the static DRAM the 4th (Atari) core needs, with zero performance change.
-static const DRAM_ATTR uint8_t cycles[] = { 7, 6, 1, 0, 0, 3, 5, 0, 3, 2, 2, 0, 0, 4, 6, 0,
+static const uint8_t cycles[] = { 7, 6, 1, 0, 0, 3, 5, 0, 3, 2, 2, 0, 0, 4, 6, 0,
                        2, 5, 1, 0, 0, 4, 6, 0, 2, 4, 0, 0, 0, 4, 7, 0,
                        6, 6, 1, 0, 3, 3, 5, 0, 4, 2, 2, 0, 4, 4, 6, 0,
                        2, 5, 1, 0, 0, 4, 6, 0, 2, 4, 0, 0, 0, 4, 7, 0,
@@ -94,31 +93,30 @@ static const DRAM_ATTR uint8_t cycles[] = { 7, 6, 1, 0, 0, 3, 5, 0, 3, 2, 2, 0, 
                        2, 6, 0, 0, 3, 3, 5, 0, 2, 2, 2, 0, 4, 4, 6, 0,
                        2, 5, 1, 0, 0, 4, 6, 0, 2, 4, 0, 0, 0, 4, 7, 0 };
 
-// CPU registers
+// CPU registers (file-local; shadow the Apple-core globals of the same name, like the NES core)
 static unsigned short PC, lastPC, argument_addr;
 static unsigned char STP = 0xFD, A = 0, X = 0, Y = 0, SR = SR_FIXED_BITS | SR_INT, opcode, opflags;
 static unsigned char value8;
 static unsigned short value16, value16_2, result;
 
-// Fast inline bus access for the CPU hot path: the common RAM ($0000-$1FFF, mirrored) and PRG
-// ROM ($8000-$FFFF) regions resolve inline, skipping the read8/write8 call + region-branch chain
-// that dominated per-instruction cost. PPU/APU/controller/mapper I/O still routes through the full
-// bus. Safe because cpuLoop refuses to run without a loaded ROM, so prgMap[] is always non-null.
+// Fast inline bus access (the hot path): cart ROM ($1000-$1FFF, every opcode/operand fetch) and
+// the 128-byte RIOT RAM ($80-$FF and its stack mirror $180-$1FF — A7=1, A9=0) resolve inline;
+// TIA/RIOT-I/O still route through the full bus. The RAM test (a & 0x1280)==0x80 keys on A7 set
+// with A12/A9 clear, which also captures the stack ($0180-$01FF) thanks to the 2600 RAM overlap.
 static inline __attribute__((always_inline)) uint8_t cpuRead(uint16_t a) {
-  if (a < 0x2000)  return cpuRam[a & 0x07FF];
-  if (a >= 0x8000) return prgMap[(a >> 13) & 3][a & 0x1FFF];
+  if (a & 0x1000) return cartRead(a);
+  if ((a & 0x1280) == 0x80) return riotRam[a & 0x7F];
   return read8(a);
 }
 static inline __attribute__((always_inline)) uint16_t cpuRead16(uint16_t a) {
   return (uint16_t)cpuRead(a) | ((uint16_t)cpuRead((uint16_t)(a + 1)) << 8);
 }
 static inline __attribute__((always_inline)) void cpuWrite(uint16_t a, uint8_t v) {
-  if (a < 0x2000) { cpuRam[a & 0x07FF] = v; return; }
+  if ((a & 0x1280) == 0x80) { riotRam[a & 0x7F] = v; return; }
   write8(a, v);
 }
-// Stack ops (page $0100, RAM) — always_inline, defined ahead of all callers (cpuIRQ/NMI/loop)
-// so JSR/RTS/PHA/PLA/interrupts avoid a function call. File-local: name lookup binds these (not
-// the Apple core's global push16/push8 from proto.h) because the definition precedes every use.
+// Stack ops (page $0100, RAM via the overlap) — defined ahead of all callers so name lookup binds
+// these, not the Apple core's global push16/push8 from proto.h.
 static inline __attribute__((always_inline)) void push16(unsigned short pushval) {
   cpuWrite(STP_BASE + (STP--), (pushval >> 8) & 0xFF);
   cpuWrite(STP_BASE + (STP--), pushval & 0xFF);
@@ -139,20 +137,6 @@ void cpuReset() {
   SR = SR_FIXED_BITS | SR_INT;
 }
 
-void cpuIRQ() {
-  push16(PC);
-  push8((SR & ~SR_BRK) | SR_FIXED_BITS);
-  SR |= SR_INT;
-  PC = cpuRead16(0xFFFE);
-}
-
-void cpuNMI() {
-  push16(PC);
-  push8((SR & ~SR_BRK) | SR_FIXED_BITS);
-  SR |= SR_INT;
-  PC = cpuRead16(0xFFFA);
-}
-
 static inline __attribute__((always_inline)) void setflags() {
   switch (opflags & 0xF0) {
     case  FL_ZN: SR &= 0x7D; break;
@@ -168,35 +152,28 @@ static inline __attribute__((always_inline)) void setflags() {
 }
 
 void cpuLoop() {
-  if (!prgMap[0]) { printLog("NES: no ROM loaded; CPU idle"); while (running) delay(100); return; }
+  if (!cartRom) { printLog("Atari: no ROM loaded; CPU idle"); while (running) delay(100); return; }
   cpuReset();
   lastPC = PC;
 
-  // Lightweight FPS readout: gated on the frame counter changing (≤60 checks/sec), so it adds no
-  // per-instruction cost. 60 = full speed.
-  uint32_t fpsLastMs = millis(), fpsLastFrames = nesFrameCount, fpsSeenFrame = nesFrameCount;
+  uint32_t fpsLastMs = millis(), fpsLastFrames = atariFrameCount, fpsSeenFrame = atariFrameCount;
 
   while (running) {
-    while (paused) { delay(100); fpsLastMs = millis(); fpsLastFrames = nesFrameCount; }
+    while (paused) { delay(100); fpsLastMs = millis(); fpsLastFrames = atariFrameCount; }
 
-    // A new ROM was loaded from the settings window -> reset CPU+PPU to start it cleanly.
-    if (nesResetReq) { nesResetReq = false; ppuReset(); cpuReset(); lastPC = PC; }
+    // A new ROM was loaded from the settings window -> reset TIA/RIOT/CPU to start it cleanly.
+    if (atariResetReq) { atariResetReq = false; tiaReset(); riotReset(); cpuReset(); lastPC = PC; }
 
-    if (nesFrameCount != fpsSeenFrame) {        // a frame just completed
-      fpsSeenFrame = nesFrameCount;
+    if (atariFrameCount != fpsSeenFrame) {        // a field just completed
+      fpsSeenFrame = atariFrameCount;
       uint32_t nowMs = millis();
       if (nowMs - fpsLastMs >= 1000) {
-        sprintf(buf, "NES fps=%u heap=%u", (unsigned)(nesFrameCount - fpsLastFrames),
+        sprintf(buf, "Atari fps=%u heap=%u", (unsigned)(atariFrameCount - fpsLastFrames),
                 (unsigned)ESP.getFreeHeap());
         printLog(buf);
-        fpsLastMs = nowMs; fpsLastFrames = nesFrameCount;
+        fpsLastMs = nowMs; fpsLastFrames = atariFrameCount;
       }
     }
-
-    // VBlank NMI (edge-triggered, set by the PPU).
-    if (nmiPending) { nmiPending = false; cpuNMI(); }
-    // Mapper IRQ (MMC3 scanline counter), level-held until the handler acks ($E000); maskable.
-    if (irqLine && !(SR & SR_INT)) cpuIRQ();
 
     lastPC = PC;
     opcode = cpuRead(PC++);
@@ -254,6 +231,14 @@ void cpuLoop() {
         argument_addr = ((unsigned short)cpuRead(PC++) + (unsigned short)Y) & 0xFF; break;
     }
 
+    // Advance the TIA + RIOT for this instruction BEFORE executing its body, so beam-position-
+    // sensitive writes (RESP0/1, RESM0/1, RESBL strobes and HMOVE) land at the end-of-instruction
+    // beam position (~the real write cycle) instead of the start — otherwise sprites sit several
+    // pixels too far left. WSYNC is still drained after the body (it sets wsyncStall in the switch).
+    int preCyc = instrCycles;   // base cycles; a taken branch adds +1 in the switch (stepped after)
+    tiaStepInline(instrCycles);
+    riotTick(instrCycles);
+
     switch (opcode) {
       // ADC
       case 0x69: case 0x65: case 0x75: case 0x6D: case 0x7D: case 0x79: case 0x61: case 0x71: case 0x72:
@@ -288,14 +273,18 @@ void cpuLoop() {
       // ASL
       case 0x06: case 0x16: case 0x0E: case 0x1E:
         value16 = cpuRead(argument_addr); result = value16 << 1; setflags(); cpuWrite(argument_addr, result & 0xFF); break;
+      // Conditional branches: a TAKEN branch costs +1 cycle (the 6502 penalty). This matters on
+      // the 2600 — many games busy-wait on the RIOT timer with `LDA INTIM; BNE`, and the exact
+      // loop length (7 cycles, taken) is what lets the poll read the timer's 0; a 6-cycle loop is
+      // parity-locked and hangs forever (page-cross adds a 2nd cycle, omitted as non-critical).
       // BCC
-      case 0x90: if (!(SR & SR_CARRY)) PC += argument_addr; break;
+      case 0x90: if (!(SR & SR_CARRY)) { PC += argument_addr; instrCycles++; } break;
       // BCS
-      case 0xB0: if ((SR & SR_CARRY)) PC += argument_addr; break;
+      case 0xB0: if ((SR & SR_CARRY)) { PC += argument_addr; instrCycles++; } break;
       // BEQ
-      case 0xF0: if ((SR & SR_ZERO)) PC += argument_addr; break;
+      case 0xF0: if ((SR & SR_ZERO)) { PC += argument_addr; instrCycles++; } break;
       // BNE
-      case 0xD0: if (!(SR & SR_ZERO)) PC += argument_addr; break;
+      case 0xD0: if (!(SR & SR_ZERO)) { PC += argument_addr; instrCycles++; } break;
       // BIT
       case 0x24: case 0x2C: case 0x34: case 0x3C:
         value8 = cpuRead(argument_addr); result = A & value8; setflags();
@@ -306,18 +295,18 @@ void cpuLoop() {
         value8 = cpuRead(argument_addr); result = A & value8;
         if (result == 0) SR |= 0x02; else SR &= 0xfd; break;
       // BMI
-      case 0x30: if ((SR & SR_NEG)) PC += argument_addr; break;
+      case 0x30: if ((SR & SR_NEG)) { PC += argument_addr; instrCycles++; } break;
       // BPL
-      case 0x10: if (!(SR & SR_NEG)) PC += argument_addr; break;
+      case 0x10: if (!(SR & SR_NEG)) { PC += argument_addr; instrCycles++; } break;
       // BRK
       case 0x00:
         PC++; push16(PC); push8(SR | SR_BRK); SR |= SR_INT; PC = cpuRead16(0xFFFE); SR &= 0xF7; break;
       // BRA (65C02)
-      case 0x80: PC += argument_addr; break;
+      case 0x80: PC += argument_addr; instrCycles++; break;
       // BVC
-      case 0x50: if (!(SR & SR_OVER)) PC += argument_addr; break;
+      case 0x50: if (!(SR & SR_OVER)) { PC += argument_addr; instrCycles++; } break;
       // BVS
-      case 0x70: if (SR & SR_OVER) PC += argument_addr; break;
+      case 0x70: if (SR & SR_OVER) { PC += argument_addr; instrCycles++; } break;
       // CLC
       case 0x18: SR &= 0xFE; break;
       // CLD
@@ -475,12 +464,18 @@ void cpuLoop() {
       default: break;    // unhandled / unofficial: treat as NOP
     }
 
-    if (dmaStallCycles) { instrCycles += dmaStallCycles; dmaStallCycles = 0; }
-    // Inlined ppuStep: the common per-instruction work is just an accumulate + compare;
-    // endScanline (the heavy per-scanline render) is still a call but fires only ~1/113 cycles.
-    dotAcc += instrCycles * 3;
-    while (dotAcc >= 341) { dotAcc -= 341; endScanline(); }
+    // A taken conditional branch added +1 cycle in the switch (after the pre-step above) — advance
+    // the TIA/RIOT for that extra cycle so timer/beam timing stays exact (the INTIM busy-wait loops
+    // depend on it; missing it re-introduces the 6-cycle-loop hang).
+    if (instrCycles != preCyc) { int e = instrCycles - preCyc; tiaStepInline(e); riotTick(e); }
+
+    // WSYNC ($02): the body set wsyncStall — drain the rest of this scanline now.
+    if (wsyncStall) {
+      wsyncStall = false;
+      int extra = tiaTickToLineEnd();
+      if (extra) riotTick(extra);
+    }
   }
 }
 
-} // namespace nes
+} // namespace atari

@@ -20,6 +20,11 @@ void nesSetup() {
   menuScreen = (unsigned char *)malloc(0x546);
   menuColor  = (unsigned char *)malloc(0x546);
 
+  // Heap-allocate the startup-warning buffer before the loader writes it (not static BSS — the
+  // static DRAM budget is full now four cores are resident; same reason cpuRam/vram are malloc'd).
+  nes::loadWarn = (char *)malloc(256);
+  if (nes::loadWarn) nes::loadWarn[0] = 0;
+
   // 256x240 8-bit indexed framebuffer lives in the shared static buffer (mutually exclusive
   // with Apple RAM / the C64 framebuffer); 256*240 = 61440 <= sizeof(sharedBigBuf).
   nes::framebuffer = sharedBigBuf;
@@ -110,7 +115,7 @@ static void nesDrawWarning() {
 }
 
 bool nesRenderLoadWarning() {
-  if (!nes::loadWarn[0]) return false;
+  if (!nes::loadWarn || !nes::loadWarn[0]) return false;
   static uint32_t until = 0;
   static bool started = false, drawn = false;
   if (!started) { until = millis() + 6000; started = true; }   // ~6s after the game first renders

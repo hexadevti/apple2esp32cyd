@@ -86,13 +86,14 @@ uint8_t *prgBankResolve(int window, int bank8k) {
 
 // Append a short "<rom>: <reason>" line to the on-screen startup warning (kept narrow to fit).
 static void loadWarnAdd(const char *path, const char *reason) {
+  if (!loadWarn) return;
   const char *name = (*path == '/') ? path + 1 : path;
   size_t cur = strlen(loadWarn);
   if (cur > 200) return;
   char nm[28]; strncpy(nm, name, 26); nm[26] = 0;
   char line[64];
   snprintf(line, sizeof(line), "%s: %s\n", nm, reason);
-  strncat(loadWarn, line, sizeof(loadWarn) - 1 - cur);
+  strncat(loadWarn, line, 255 - cur);
 }
 
 bool nesLoadROM(const char *path) {
@@ -261,11 +262,11 @@ static int nesPeekMapper(const char *path) {
 }
 
 bool nesLoadFirstRom() {
-  loadWarn[0] = 0;                              // fresh warning text each boot
+  if (loadWarn) loadWarn[0] = 0;               // fresh warning text each boot
   if (nesFiles.empty()) loadNesFilesSync();
   if (nesFiles.empty()) {
     printLog("NES: no .nes on SD root");
-    strcpy(loadWarn, "No .nes files found on the SD card\n");
+    if (loadWarn) strcpy(loadWarn, "No .nes files found on the SD card\n");
     return false;
   }
   // Boot back into the last-loaded ROM (persisted in EEPROM by the settings page), if it still loads.
@@ -282,7 +283,7 @@ bool nesLoadFirstRom() {
   for (size_t i = 0; i < nesFiles.size(); i++)
     if (nesPeekMapper(nesFiles[i].c_str()) < 1 && nesLoadROM(nesFiles[i].c_str())) return true;
   printLog("NES: no loadable .nes on SD root");
-  strncat(loadWarn, "-> no ROM could be loaded\n", sizeof(loadWarn) - 1 - strlen(loadWarn));
+  if (loadWarn) strncat(loadWarn, "-> no ROM could be loaded\n", 255 - strlen(loadWarn));
   return false;
 }
 

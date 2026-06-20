@@ -27,6 +27,13 @@ void setup() {
     oskSetup();
     joystickSetup();   // analog stick + buttons -> NES controller 1
     nesApuSetup();     // APU -> I2S DAC (GPIO26), LAST so its I2S DMA comes after SD (like SID)
+  } else if (currentPlatform == PLATFORM_ATARI) {
+    FSSetup();         // SD first: atariSetup loads the first .a26/.bin off the card
+    atariSetup();      // 128B RAM, TIA, RIOT, cartridge loader, framebuffer = sharedBigBuf
+    videoSetup();      // TFT + render loop (+ splash)
+    oskSetup();
+    joystickSetup();   // analog stick + buttons -> 2600 joystick + console switches
+    atariAudioSetup(); // TIA audio -> I2S DAC (GPIO26), LAST so its I2S DMA comes after SD
   } else {             // Apple II
     memoryAlloc();
     FSSetup();
@@ -49,6 +56,7 @@ void loop() {
     case PLATFORM_APPLE2: cpuLoop(); break;
     case PLATFORM_C64:    c64Loop(); break;
     case PLATFORM_NES:    nesLoop(); break;
+    case PLATFORM_ATARI:  atariLoop(); break;
     default:              cpuLoop(); break;
   }
 }

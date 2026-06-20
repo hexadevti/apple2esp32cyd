@@ -1,4 +1,5 @@
 #include "../../emu.h"
+#include "driver/adc.h"   // adc1_config_*: re-assert the ADC config so analogRead doesn't freeze
 
 static void analogJoystickTask(void *pvParameters);   // defined below; used by joystickSetup
 
@@ -73,9 +74,9 @@ static void buttonDown(uint8_t btn)
 {
     if (btn == 3)
     {
-        // Button 3 opens/closes the settings menu — except on NES, where it is the Start
-        // button (the NES menu is opened by a screen tap instead, see oskPoll).
-        if (currentPlatform != PLATFORM_NES) showHideOptionsWindow();
+        // Button 3 opens/closes the settings menu — except on NES/Atari, where the menu is
+        // opened by a screen tap instead (see oskPoll), freeing the buttons for the game.
+        if (currentPlatform != PLATFORM_NES && currentPlatform != PLATFORM_ATARI) showHideOptionsWindow();
         return;
     }
     if (OptionsWindow)
@@ -152,6 +153,13 @@ static void analogJoystickTask(void *pvParameters)
 {
     while (running)
     {
+        // Re-assert the ADC1 config every poll. On some platform paths the SAR ADC ends up in a
+        // bad width/atten state and analogRead returns a frozen (boot-time) value — re-applying the
+        // Arduino defaults (12-bit, 11dB full range) here keeps the stick + buttons live. Cheap
+        // (a few register writes at ~33Hz); also stabilises the ADC2 stick-X read.
+        adc1_config_width(ADC_WIDTH_BIT_12);
+        adc1_config_channel_atten(ADC1_CHANNEL_7, ADC_ATTEN_DB_11);  // GPIO35 (joystick Y)
+        adc1_config_channel_atten(ADC1_CHANNEL_6, ADC_ATTEN_DB_11);  // GPIO34 (resistor-ladder buttons)
         int joyRawX = analogRead(ANALOG_X_PIN);
         int joyRawY = analogRead(ANALOG_Y_PIN);
         analogX = 4095 - joyRawX;
@@ -409,6 +417,27 @@ static void analogJoystickTask(void *pvParameters)
                 if (Pb3)       b |= 0x08;   // Start
             }
             nesSetController(b);
+        }
+
+        // Atari 2600: 8-way stick -> joystick directions, Pb0 = Fire, Pb1 = Select,
+        // Pb3 = Reset (= "Start" on most 2600 games — placed on Pb3 to match the NES Start button;
+        // Pb2 also triggers Reset). The settings menu is opened by a screen tap (see oskPoll).
+        // dirBits to atariSetInput: bit0=Up, bit1=Down, bit2=Left, bit3=Right.
+        if (currentPlatform == PLATFORM_ATARI)
+        {
+            uint8_t d = 0;
+            bool fire = false, select = false, reset = false;
+            if (joystick && !OptionsWindow)
+            {
+                if (joyX == 0) d |= 0x01;   // up
+                if (joyX == 2) d |= 0x02;   // down
+                if (joyY == 0) d |= 0x04;   // left
+                if (joyY == 2) d |= 0x08;   // right
+                fire   = Pb0;
+                select = Pb1;
+                reset  = Pb2 || Pb3;        // Pb3 = Start (Reset switch), like the NES Start button
+            }
+            atariSetInput(d, fire, select, reset);
         }
 
         if (pJoyX != joyX)

@@ -64,13 +64,13 @@ uint16_t last_x = 0;
 #define SPLASH_MS    3000
 #define SPLASH_BTN_Y 164
 #define SPLASH_BTN_H 44
-static const int splashBtnX[3] = {6, 110, 214};
-static const int splashBtnW    = 98;
+static const int splashBtnX[4] = {4, 82, 160, 238};
+static const int splashBtnW    = 74;
 
 static int splashHitTest(int16_t x, int16_t y)
 {
   if (y < SPLASH_BTN_Y || y >= SPLASH_BTN_Y + SPLASH_BTN_H) return -1;
-  for (int i = 0; i < 3; i++)
+  for (int i = 0; i < 4; i++)
     if (x >= splashBtnX[i] && x < splashBtnX[i] + splashBtnW) return i;
   return -1;
 }
@@ -120,19 +120,21 @@ static void splashService()
     tft.setTextDatum(MC_DATUM);
     tft.setTextColor(tft.color565(150, 160, 175), TFT_BLACK);
     tft.drawString("SELECT SYSTEM", 160, 150, 2);
-    splashDrawBtn(PLATFORM_APPLE2, "APPLE II", true);
-    splashDrawBtn(PLATFORM_C64,    "C64",      true);
-    splashDrawBtn(PLATFORM_NES,    "NES",      true);
+    splashDrawBtn(PLATFORM_APPLE2, "APPLE",  true);
+    splashDrawBtn(PLATFORM_C64,    "C64",    true);
+    splashDrawBtn(PLATFORM_NES,    "NES",    true);
+    splashDrawBtn(PLATFORM_ATARI,  "ATARI",  true);
     drawn = true;
   }
 
   int16_t tx, ty;
   if (touchRead(&tx, &ty)) {
     int b = splashHitTest(tx, ty);
-    if (b == PLATFORM_APPLE2)    splashSelect(PLATFORM_APPLE2);
-    else if (b == PLATFORM_C64)  splashSelect(PLATFORM_C64);
-    else if (b == PLATFORM_NES)  splashSelect(PLATFORM_NES);
-    else if (b < 0)              splashFinish();   // tapped outside -> boot current
+    if (b == PLATFORM_APPLE2)     splashSelect(PLATFORM_APPLE2);
+    else if (b == PLATFORM_C64)   splashSelect(PLATFORM_C64);
+    else if (b == PLATFORM_NES)   splashSelect(PLATFORM_NES);
+    else if (b == PLATFORM_ATARI) splashSelect(PLATFORM_ATARI);
+    else if (b < 0)               splashFinish();   // tapped outside -> boot current
     return;
   }
   if (millis() - startMs >= SPLASH_MS || Pb0 || Pb1 || Pb2 || Pb3) splashFinish();
@@ -157,6 +159,14 @@ void renderLoop(void *pvParameters)
     // NES startup ROM-skip warning: hold a full-screen note (skipped/over-budget ROMs) for a few
     // seconds after boot, before normal rendering / touch handling kicks in.
     if (currentPlatform == PLATFORM_NES && nesRenderLoadWarning())
+    {
+      Vertical_blankingOn_Off = true;
+      vTaskDelay(pdMS_TO_TICKS(20));
+      continue;
+    }
+
+    // Atari 2600 startup ROM-skip warning (same idea as the NES overlay above).
+    if (currentPlatform == PLATFORM_ATARI && atariRenderLoadWarning())
     {
       Vertical_blankingOn_Off = true;
       vTaskDelay(pdMS_TO_TICKS(20));
@@ -192,6 +202,16 @@ void renderLoop(void *pvParameters)
     if (currentPlatform == PLATFORM_NES)
     {
       nesRenderFrame();
+      Vertical_blankingOn_Off = true;
+      vTaskDelay(pdMS_TO_TICKS(10));
+      continue;
+    }
+
+    // Atari 2600 core renders its own 160x192 framebuffer (filled by the TIA on the CPU core);
+    // convert + push it here, doubled to 320 wide with top/bottom borders.
+    if (currentPlatform == PLATFORM_ATARI)
+    {
+      atariRenderFrame();
       Vertical_blankingOn_Off = true;
       vTaskDelay(pdMS_TO_TICKS(10));
       continue;

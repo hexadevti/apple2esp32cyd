@@ -65,11 +65,13 @@ static int optionsUiFocus = 0;
 // without duplicating the whole UI.
 static bool ouiIsC64() { return currentPlatform == PLATFORM_C64; }
 static bool ouiIsNES() { return currentPlatform == PLATFORM_NES; }
+static bool ouiIsAtari() { return currentPlatform == PLATFORM_ATARI; }
 
 static std::vector<std::string> &ouiFiles()
 {
   if (ouiIsC64()) return c64Files;
   if (ouiIsNES()) return nesFiles;
+  if (ouiIsAtari()) return atariFiles;
   return HdDisk ? hdFiles : diskFiles;
 }
 
@@ -77,6 +79,7 @@ static std::string ouiSel()
 {
   if (ouiIsC64()) return std::string(selectedC64FileName.c_str());
   if (ouiIsNES()) return std::string(selectedNesFileName.c_str());
+  if (ouiIsAtari()) return std::string(selectedAtariFileName.c_str());
   return std::string((HdDisk ? selectedHdFileName : selectedDiskFileName).c_str());
 }
 
@@ -178,7 +181,7 @@ static void ouiDrawToggles()
     for (int i = 5; i < 8; i++) ouiClearToggle(i);
     return;
   }
-  if (ouiIsNES()) {
+  if (ouiIsNES() || ouiIsAtari()) {          // NES / Atari grid: SOUND / JOYSTICK / VIDEO
     ouiDrawToggle(0, "SOUND",    sound ? "ON" : "MUTE",          OUI_TXT);
     ouiDrawToggle(1, "JOYSTICK", joystick ? "ON" : "OFF",        OUI_TXT);
     ouiDrawToggle(2, "VIDEO",    videoColor ? "COLOR" : "MONO",  OUI_TXT);
@@ -225,6 +228,7 @@ static void ouiDrawFiles()
   tft.fillRect(0, OUI_FB_TOP, 320, OUI_FB_HDR_H, OUI_BG);
   char hdr[40];
   sprintf(hdr, "%s  (%d)", ouiIsC64() ? "PRG/D64/CRT" : ouiIsNES() ? "NES ROMS"
+                         : ouiIsAtari() ? "A26/BIN ROMS"
                          : (HdDisk ? "HD IMAGES" : "DISK IMAGES"),
           (int)files.size());
   tft.setTextDatum(BL_DATUM);
@@ -304,7 +308,7 @@ static void ouiDrawActions()
   uint16_t mc = canMount ? OUI_MOUNT : OUI_CARD2;
   uint16_t mt = canMount ? OUI_TXT : OUI_LBL;
 
-  if (ouiIsC64() || ouiIsNES()) {         // C64/NES: LOAD & RUN + REBOOT
+  if (ouiIsC64() || ouiIsNES() || ouiIsAtari()) {   // C64/NES/Atari: LOAD & RUN + REBOOT
     ouiActBtn(6,   120, "LOAD & RUN", mc,         mt,      OUI_FOC_MOUNT);
     ouiActBtn(132, 182, "REBOOT",     OUI_REBOOT, OUI_TXT, OUI_FOC_REBOOT);
     return;
@@ -321,7 +325,8 @@ static void ouiDrawTitle()
   tft.setTextDatum(ML_DATUM);
   tft.setTextColor(OUI_TXT, OUI_TITLE);
   tft.drawString(ouiIsC64() ? "COMMODORE 64  SETTINGS"
-               : ouiIsNES() ? "NINTENDO  NES  SETTINGS" : "APPLE II  SETTINGS",
+               : ouiIsNES() ? "NINTENDO  NES  SETTINGS"
+               : ouiIsAtari() ? "ATARI 2600  SETTINGS" : "APPLE II  SETTINGS",
                  10, OUI_TITLE_H / 2, 2);
   int cw = OUI_TITLE_H, cx = 320 - cw;
   tft.fillRect(cx, 0, cw, OUI_TITLE_H, OUI_RED);
@@ -359,7 +364,7 @@ static void ouiToggle(int idx)
     optionsUiDirty = true;
     return;
   }
-  if (ouiIsNES()) {                        // NES grid: SOUND / JOYSTICK / VIDEO
+  if (ouiIsNES() || ouiIsAtari()) {        // NES / Atari grid: SOUND / JOYSTICK / VIDEO
     switch (idx) {
       case 0: sound = !sound;           break;
       case 1: joystick = !joystick;     break;
@@ -415,6 +420,12 @@ static void ouiMount()
   if (ouiIsNES()) {                       // NES: load the highlighted .nes + reset into it
     if (shownFile >= files.size()) return;
     if (nesLoadSelected(files[shownFile].c_str()))
+      showHideOptionsWindow();            // close only on success (failure keeps the old ROM)
+    return;
+  }
+  if (ouiIsAtari()) {                      // Atari: load the highlighted .a26/.bin + reset into it
+    if (shownFile >= files.size()) return;
+    if (atariLoadSelected(files[shownFile].c_str()))
       showHideOptionsWindow();            // close only on success (failure keeps the old ROM)
     return;
   }
@@ -519,7 +530,7 @@ static void ouiHandleTap(int16_t x, int16_t y)
 
   // action buttons
   if (y >= OUI_ACT_TOP && y < OUI_ACT_TOP + OUI_ACT_H) {
-    if (ouiIsC64() || ouiIsNES()) {         // LOAD & RUN (6..126) | REBOOT (132..314)
+    if (ouiIsC64() || ouiIsNES() || ouiIsAtari()) {   // LOAD & RUN (6..126) | REBOOT (132..314)
       if (x >= 6 && x < 126)        ouiMount();
       else if (x >= 132 && x < 314) ouiReboot();
     } else {                                // MOUNT (4..106) | M+REBOOT (109..211) | REBOOT (214..316)
@@ -550,6 +561,7 @@ void optionsUiOpen()
 {
   if (ouiIsC64() && c64Files.empty()) loadC64FilesSync();   // populate the .prg browser
   if (ouiIsNES() && nesFiles.empty()) nesScanFiles();       // populate the .nes browser
+  if (ouiIsAtari() && atariFiles.empty()) atariScanFiles(); // populate the .a26/.bin browser
   optionsUiSyncSelection();
   optionsUiFocus       = 0;
   optionsUiFirstDraw   = true;
