@@ -73,14 +73,17 @@ static void rebuildPf() {
   pf20 = p;
 }
 
-// Per-pixel object-coverage bitmap for the current scanline. Rebuilt by buildCoverage() only when
-// a coverage register actually changes (covDirty), not every pixel — so per-dot rendering stays
-// accurate (mid-line RESP/HMOVE moves are seen immediately) while the per-pixel cost stays low.
+// Object-coverage bitmap for the current scanline, built ONE SPAN at a time. Each flushSpan rebuilds
+// exactly its own [spanX,toPx) slice (markLo..markHi) from the registers live while the beam crosses
+// it — so mid-line RESP/HMOVE/GRP moves stay pixel-accurate AND each line's coverage is built only
+// once (no redundant whole-tail rebuild on every register write, the old hot spot). pfLine caches the
+// playfield row (PF rarely changes mid-line), copied into the slice; objects OR over it, clipped.
 enum { O_P0 = 1, O_P1 = 2, O_M0 = 4, O_M1 = 8, O_BL = 16, O_PF = 32 };
 static uint8_t objLine[160];
 static uint8_t pfLine[160];   // cached playfield-only coverage; rebuilt only on PF/CTRLPF change
-static bool covDirty = true, pfDirty = true;
+static bool pfDirty = true;
 static int spanX = 0;   // next pixel of the current line not yet rendered (span-flush renderer)
+static int markLo = 0, markHi = 160;   // clip window for the slice currently being built
 
 static inline void markPlayer(int p, uint8_t g, uint8_t bit) {
   int nusiz = p ? nusiz1 : nusiz0, mode = nusiz & 7;
@@ -91,16 +94,17 @@ static inline void markPlayer(int p, uint8_t g, uint8_t bit) {
     for (int b = 0; b < 8; b++) {
       if (!(refl ? ((g >> b) & 1) : ((g >> (7 - b)) & 1))) continue;
       int x0 = base + b * scale;
-      for (int s = 0; s < scale; s++) { int x = x0 + s; if ((unsigned)x < 160) objLine[x] |= bit; }
+      for (int s = 0; s < scale; s++) { int x = x0 + s; if (x >= markLo && x < markHi) objLine[x] |= bit; }
     }
   }
 }
 static inline void markSpan(int x0, int w, uint8_t bit) {
-  for (int i = 0; i < w; i++) { int x = x0 + i; if ((unsigned)x < 160) objLine[x] |= bit; }
+  int a = x0 < markLo ? markLo : x0, b = x0 + w; if (b > markHi) b = markHi;
+  for (int x = a; x < b; x++) objLine[x] |= bit;
 }
 
-// Rebuild objLine (object coverage) from the current registers; called lazily when covDirty is set.
-static void buildCoverage() {
+// Build objLine over [lo,hi) (the span about to be rendered) from the live registers.
+static void buildCoverage(int lo, int hi) {
   if (pfDirty) {   // rebuild the cached playfield row only when PF0/1/2 or the CTRLPF reflect changed
     for (int cell = 0; cell < 40; cell++) {
       int pfidx = (cell < 20) ? cell : ((ctrlpf & 0x01) ? (39 - cell) : (cell - 20));
@@ -110,7 +114,8 @@ static void buildCoverage() {
     }
     pfDirty = false;
   }
-  memcpy(objLine + spanX, pfLine + spanX, 160 - spanX);  // only the not-yet-rendered tail matters
+  markLo = lo; markHi = hi;
+  memcpy(objLine + lo, pfLine + lo, hi - lo);            // playfield base for this slice
   if (vdelbl ? enablOld : enablNew) markSpan(ballX, 1 << ((ctrlpf >> 4) & 3), O_BL);
   uint8_t dg0 = vdelp0 ? grp0Old : grp0New;
   uint8_t dg1 = vdelp1 ? grp1Old : grp1New;
@@ -131,9 +136,15 @@ static void buildCoverage() {
 static inline __attribute__((always_inline)) void compositePixel(uint8_t *line, int px) {
   uint8_t o = objLine[px];
   uint8_t *fbp = line + px;
-  if (o == 0)    { *fbp = colubk; return; }                                  // background (commonest)
+  // flushSpan only calls this for pixels carrying an object (o != 0 and o != O_PF — those runs are
+  // memset there). Fast-path a lone object over background: a single coverage bit means no overlap
+  // (no collision) and no playfield (no priority), so the colour is immediate.
+  switch (o) {
+    case O_P0: case O_M0: *fbp = colup0; return;   // player/missile 0 share COLUP0
+    case O_P1: case O_M1: *fbp = colup1; return;   // player/missile 1 share COLUP1
+    case O_BL:            *fbp = colupf; return;    // ball uses COLUPF
+  }
   bool score = ctrlpf & 0x02;
-  if (o == O_PF) { *fbp = score ? (px < 80 ? colup0 : colup1) : colupf; return; }  // playfield only
   bool p0 = o & O_P0, p1 = o & O_P1, m0 = o & O_M0, m1 = o & O_M1, bl = o & O_BL, pf = o & O_PF;
 
   if (o & (o - 1)) {                 // 2+ objects overlap -> collision latches
@@ -178,7 +189,7 @@ static inline __attribute__((always_inline)) void compositePixel(uint8_t *line, 
 static void flushSpan(int toPx) {
   if (toPx <= spanX) return;
   if (!vblank && !vsync && outRow < 192) {
-    if (covDirty) { buildCoverage(); covDirty = false; }
+    buildCoverage(spanX, toPx);   // build exactly this span's coverage (clipped) from live registers
     uint8_t *line = framebuffer + outRow * 160;
     bool score = ctrlpf & 0x02;
     int px = spanX;
@@ -204,7 +215,6 @@ static void flushSpan(int toPx) {
 void tiaLineWrap() {
   if (!vblank && !vsync && outRow < 192) { flushSpan(160); outRow++; }   // finish the line
   spanX = 0;
-  covDirty = true;
   scanline++;
 }
 
@@ -226,8 +236,9 @@ int tiaTickToLineEnd() {                 // WSYNC: finish this line, advance to 
 
 void tiaWrite(uint8_t reg, uint8_t val) {
   // A coverage-changing write (anything but the live-read colour $06-$09 / audio $15-$1A regs):
-  // first render the span the beam has already crossed using the OLD coverage, THEN apply the change
-  // and flag a rebuild — so mid-line RESP/HMOVE repositioning only affects pixels drawn after it.
+  // first render the span the beam has already crossed using the OLD coverage, THEN apply the change —
+  // so mid-line RESP/HMOVE repositioning only affects pixels drawn after it. The next flushSpan rebuilds
+  // its slice from the new registers (each span is built fresh, so there's no dirty flag to set).
   bool cov = !((reg >= 0x06 && reg <= 0x09) || (reg >= 0x15 && reg <= 0x1A) ||
                (reg >= 0x20 && reg <= 0x24) || reg == 0x2B || reg == 0x2C);  // colour/audio/HM-motion
   if (cov) { int px = colorClock - 68; if (px < 0) px = 0; else if (px > 160) px = 160; flushSpan(px); }
@@ -288,7 +299,6 @@ void tiaWrite(uint8_t reg, uint8_t val) {
     case 0x2C: for (int i = 0; i < 8; i++) collision[i] = 0; break;               // CXCLR
     default: break;
   }
-  if (cov) covDirty = true;   // rebuild coverage before the next span flush
 }
 
 uint8_t tiaRead(uint8_t reg) {
@@ -314,7 +324,7 @@ void tiaReset() {
   hmp0 = hmp1 = hmm0 = hmm1 = hmbl = 0;
   for (int i = 0; i < 8; i++) collision[i] = 0;
   wsyncStall = false;
-  covDirty = true; pfDirty = true; spanX = 0;
+  pfDirty = true; spanX = 0;
   if (framebuffer) memset(framebuffer, 0, 160 * 192);
 }
 
