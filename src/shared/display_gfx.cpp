@@ -69,7 +69,7 @@ void DisplayGFX::begin() {
   _bus = new Arduino_ESP32QSPI(GFX_QSPI_CS_PIN, GFX_QSPI_SCK_PIN,
                                GFX_QSPI_D0_PIN, GFX_QSPI_D1_PIN,
                                GFX_QSPI_D2_PIN, GFX_QSPI_D3_PIN);
-  _panel = new Arduino_NV3041A(_bus, GFX_RST_PIN, 0 /*rotation: native landscape*/, true /*IPS*/);
+  _panel = new Arduino_NV3041A(_bus, GFX_RST_PIN, 2 /*rotation: landscape, flipped 180 deg*/, true /*IPS*/);
   _canvas = new PsramCanvas(PANEL_NATIVE_W, PANEL_NATIVE_H, (Arduino_G *)_panel);
   if (!_canvas->begin()) {
     Serial.println("DisplayGFX: canvas/panel init FAILED");

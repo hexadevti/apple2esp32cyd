@@ -1,4 +1,5 @@
 #include "emu.h"
+#include "src/iigs/m0_bench.h"   // IIGS feasibility gate; compiles to nothing unless -DIIGS_M0_BENCH
 
 void setup() {
   if (LED_PIN >= 0) {
@@ -6,6 +7,15 @@ void setup() {
     digitalWrite(LED_PIN, HIGH); // Turn off green LED (boards without an LED define LED_PIN = -1)
   }
   logSetup();
+#ifdef IIGS_M0_BENCH
+  // Throwaway Apple IIGS memory-feasibility benchmark. Runs at the very top of setup() so the
+  // render task / QSPI canvas flush / audio DMA don't perturb timing, then halts so one
+  // power-cycle-synced serial capture gets everything. Build with -DIIGS_M0_BENCH (S3 only).
+  runIIgsM0Bench();
+  Serial.println("M0 DONE -- power-cycle to re-run.");
+  Serial.flush();
+  while (true) { delay(1000); }
+#endif
   epromSetup();   // loads currentPlatform (and all saved settings) from EEPROM
   c64FreeBtMem();   // BOTH platforms: reclaim the unused BT controller DRAM (~36K) up front so
                     // tasks/buffers have heap room (Apple's render/joystick tasks were failing).

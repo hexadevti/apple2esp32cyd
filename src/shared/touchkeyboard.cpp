@@ -41,16 +41,17 @@
 #else
 // JC4827W543: raw XPT2046 on the shared HSPI bus, mapped onto the centered 320x240 logical
 // area of the 480x272 panel. Calibrated from the raw values at the four physical panel corners:
-// rawX 205..3870 maps RIGHT..LEFT and rawY 400..3725 maps BOTTOM..TOP, i.e. both axes are
-// mirrored relative to the display (INVX/INVY=1). (pressure here is z1 + 4095 - z2.)
+// rawX 205..3870 maps RIGHT..LEFT and rawY 400..3725 maps BOTTOM..TOP. With the panel rotated
+// 180 deg (Arduino_NV3041A rotation 2 in display_gfx.cpp) the display axes flip too, so both
+// INV flags are now 0 (raw orientation matches the rotated display). (pressure here is z1 + 4095 - z2.)
 // Re-run with OSK_TOUCH_DEBUG uncommented if a future panel differs.
 #define OSK_TS_MINX     205
 #define OSK_TS_MAXX     3870
 #define OSK_TS_MINY     400
 #define OSK_TS_MAXY     3725
 #define OSK_TS_SWAP_XY  0
-#define OSK_TS_INVX     1
-#define OSK_TS_INVY     1
+#define OSK_TS_INVX     0      // panel flipped 180 deg (rotation 2): axes no longer mirrored
+#define OSK_TS_INVY     0
 #define OSK_TS_ZTHRESH  400
 #endif
 // #define OSK_TOUCH_DEBUG      // uncomment to print raw + mapped touch coords (calibration aid)
