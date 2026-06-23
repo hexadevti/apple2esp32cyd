@@ -75,6 +75,14 @@ void setup() {
     oskSetup();
     joystickSetup();
     speakerSetup();     // Apple II-compatible 1-bit speaker ($C030) -> I2S amp, LAST (I2S DMA after SD)
+  } else if (currentPlatform == PLATFORM_MSX) {
+    FSSetup();          // SD first: msxSetup loads the BIOS / first cart off the card
+    msxSetup();         // 64K RAM + 16K VRAM + BIOS (SD or C-BIOS) + reset Z80/VDP/PPI/PSG
+    loadMsxFilesSync(); // scan SD root so the options ROM/disk browser is populated
+    videoSetup();       // TFT + render loop (+ splash)
+    oskSetup();
+    joystickSetup();    // analog stick + buttons -> MSX joystick (PSG port A)
+    msxPsgSetup();      // AY-3-8910 -> I2S (M3.5), LAST so its I2S DMA comes after SD
   } else {             // Apple II
     memoryAlloc();
     FSSetup();
@@ -99,6 +107,7 @@ void loop() {
     case PLATFORM_NES:    nesLoop(); break;
     case PLATFORM_ATARI:  atariLoop(); break;
     case PLATFORM_IIGS:   iigsLoop(); break;
+    case PLATFORM_MSX:    msxLoop(); break;
     default:              cpuLoop(); break;
   }
 }

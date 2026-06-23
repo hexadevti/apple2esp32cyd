@@ -113,6 +113,23 @@ void applyPlatformInput()
         }
         atariSetInput(d, fire, select, reset);
     }
+
+    // MSX: 8-way stick + 2 triggers onto the general-purpose joystick port (PSG port A, register 14).
+    // Active-LOW: bit0=up, bit1=down, bit2=left, bit3=right, bit4=trigger A, bit5=trigger B.
+    if (currentPlatform == PLATFORM_MSX)
+    {
+        uint8_t m = 0xFF;
+        if (joystick && !OptionsWindow)
+        {
+            if (joyX == 0) m &= ~0x01;   // up
+            if (joyX == 2) m &= ~0x02;   // down
+            if (joyY == 0) m &= ~0x04;   // left
+            if (joyY == 2) m &= ~0x08;   // right
+            if (Pb0)       m &= ~0x10;   // trigger A
+            if (Pb1)       m &= ~0x20;   // trigger B
+        }
+        msxSetInput(m);
+    }
 }
 
 #if BOARD_INPUT_ANALOG

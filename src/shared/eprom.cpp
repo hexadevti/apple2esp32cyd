@@ -37,7 +37,7 @@ void epromSetup() {
   dacSound = EEPROM.readBool(dacSoundEEPROMaddress);
   volume = EEPROM.readChar(VolumeEEPROMaddress);
   currentPlatform = EEPROM.readChar(PlatformEEPROMaddress);
-  if (currentPlatform > PLATFORM_IIGS) currentPlatform = PLATFORM_APPLE2;  // unset/garbage -> default
+  if (currentPlatform > PLATFORM_MSX) currentPlatform = PLATFORM_APPLE2;  // unset/garbage -> default
 
   // C64 settings (validated so old/uninitialised EEPROM doesn't enable surprises).
   c64Autoload = (EEPROM.readChar(C64AutoloadEEPROMaddress) == 1);
@@ -46,6 +46,7 @@ void epromSetup() {
   // ==1 test (not readBool) so an uninitialised 0xFF on older devices reads as OFF, not ON.
   screenFill = (EEPROM.readChar(ScreenFillEEPROMaddress) == 1);
   { char s = EEPROM.readChar(NesDisplaySkipEEPROMaddress); nesDisplaySkip = (s >= 1 && s <= 3) ? (uint8_t)s : 3; }  // default 3; fresh EEPROM (0xFF) -> 3
+  msxFast = (EEPROM.readChar(MsxSpeedEEPROMaddress) == 1);   // ==1 so fresh EEPROM (0xFF) -> NORMAL
   readStringFromEEPROM(C64FileNameEEPROMaddress, &selectedC64FileName);
   if (selectedC64FileName.length() == 0 || selectedC64FileName.length() > 120 ||
       selectedC64FileName[0] != '/') {
@@ -64,7 +65,14 @@ void epromSetup() {
   if (selectedAtariFileName.length() == 0 || selectedAtariFileName.length() > 120 ||
       selectedAtariFileName[0] != '/')
     selectedAtariFileName = "";
-    
+
+  // MSX: last-loaded .rom cartridge, auto-loaded on boot (validated; garbage -> none).
+  readStringFromEEPROM(MsxFileNameEEPROMaddress, &selectedMsxFileName);
+  if (selectedMsxFileName.length() == 0 || selectedMsxFileName.length() > 120 ||
+      selectedMsxFileName[0] != '/')
+    selectedMsxFileName = "";
+
+
   if (HdDisk) {
     int size = readStringFromEEPROM(HdFileNameEEPROMaddress, &selectedHdFileName);
     sprintf(buf, "EEPROM selectedHdFile value: %s", selectedHdFileName.c_str());
@@ -124,6 +132,7 @@ void saveEEPROM() {
     EEPROM.writeChar(PlatformEEPROMaddress, currentPlatform);
     EEPROM.writeChar(ScreenFillEEPROMaddress, screenFill ? 1 : 0);
     EEPROM.writeChar(NesDisplaySkipEEPROMaddress, (char)nesDisplaySkip);
+    EEPROM.writeChar(MsxSpeedEEPROMaddress, msxFast ? 1 : 0);
   }
 
 // Persist every user-configurable option (all toggles, volume, and the selected
@@ -138,6 +147,7 @@ void saveConfig() {
     writeStringToEEPROM(C64FileNameEEPROMaddress, selectedC64FileName);
     writeStringToEEPROM(NesFileNameEEPROMaddress, selectedNesFileName);
     writeStringToEEPROM(AtariFileNameEEPROMaddress, selectedAtariFileName);
+    writeStringToEEPROM(MsxFileNameEEPROMaddress, selectedMsxFileName);
     EEPROM.commit();
   }
   

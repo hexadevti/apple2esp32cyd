@@ -69,6 +69,7 @@ extern std::vector<std::string> diskFiles;
 extern std::vector<std::string> c64Files;
 extern std::vector<std::string> nesFiles;
 extern std::vector<std::string> atariFiles;   // Atari 2600 .a26/.bin ROMs on SD
+extern std::vector<std::string> msxFiles;      // MSX1 .rom/.mx1/.dsk images on SD
 
 // Board Pins, capability macros, and the display backend selection now live in board.h
 // (included above). Pins: SD_*, KEYBOARD_*, ANALOG_*, LED_PIN, DIGITAL_BUTTON12_PIN, SPEAKER_PIN.
@@ -152,7 +153,7 @@ extern uint8_t volume;
 // Target system for the multi-platform emulator. Apple II is implemented; C64 and
 // NES are placeholders selectable from the boot splash (see src/shared/video.cpp
 // splashService and the dispatch in emu6502.ino). Persisted in EEPROM.
-enum Platform : uint8_t { PLATFORM_APPLE2 = 0, PLATFORM_C64 = 1, PLATFORM_NES = 2, PLATFORM_ATARI = 3, PLATFORM_IIGS = 4 };
+enum Platform : uint8_t { PLATFORM_APPLE2 = 0, PLATFORM_C64 = 1, PLATFORM_NES = 2, PLATFORM_ATARI = 3, PLATFORM_IIGS = 4, PLATFORM_MSX = 5 };
 extern uint8_t currentPlatform;
 
 // Log Config
@@ -173,17 +174,22 @@ extern int logLineCount;
 #define JoyPortEEPROMaddress 10        // C64: joystick port (1 or 2)
 #define ScreenFillEEPROMaddress 11     // JC4827W543: fill-screen video upscale (char: 1 = fill)
 #define NesDisplaySkipEEPROMaddress 12 // JC4827W543 NES: display frame-skip 1..3 (char)
+#define MsxSpeedEEPROMaddress 13       // MSX: 1 = FAST (uncapped) / 0 = NORMAL (paced to 3.58 MHz)
 #define NewDeviceConfigEEPROMaddress 50
 #define DiskFileNameEEPROMaddress 128
 #define HdFileNameEEPROMaddress 256
 #define C64FileNameEEPROMaddress 384   // C64: last-loaded .prg/.d64/.crt (for autoload)
 #define NesFileNameEEPROMaddress 512   // NES: last-loaded .nes (auto-loaded on boot)
 #define AtariFileNameEEPROMaddress 640 // Atari: last-loaded .a26/.bin (auto-loaded on boot)
+#define MsxFileNameEEPROMaddress 768   // MSX: last-loaded .rom cartridge (auto-loaded on boot)
 extern String selectedDiskFileName;
 extern String selectedHdFileName;
 extern String selectedC64FileName;
 extern String selectedNesFileName;   // NES: currently-loaded ROM (settings file browser marker)
 extern String selectedAtariFileName; // Atari: currently-loaded ROM (settings file browser marker)
+extern String selectedMsxFileName;   // MSX: currently-loaded .rom cartridge (settings file browser marker)
+extern bool msxFast;                 // MSX: true = run uncapped (FAST), false = pace to real 3.58 MHz
+extern float msxMeasuredMhz;         // MSX: measured uncapped Z80 speed (one-time boot benchmark)
 extern bool c64Autoload;          // C64: auto-load selectedC64FileName on boot
 extern uint8_t joyPort;           // C64: joystick port (1 or 2)
 extern String NewDeviceConfig;

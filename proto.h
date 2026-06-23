@@ -210,6 +210,18 @@ void iigsLoadHD(const char *path);        // settings: load a .po/.2mg/.hdv bloc
 bool atariLoadSelected(const char *path); // settings: load a .a26/.bin ROM + reset the 2600
 void atariScanFiles();                    // settings: rescan SD root for *.a26 / *.bin
 
+// MSX1 core entry points (src/msx/msx.cpp), called by the platform dispatch
+void msxSetup();                          // alloc RAM/VRAM + BIOS (SD or C-BIOS) + reset Z80/VDP/PPI/PSG
+void msxLoop();                           // run the machine frame-by-frame (from loop())
+void msxRenderFrame();                    // VDP render + push the 256x192 picture (from renderLoop)
+void msxPsgSetup();                       // AY-3-8910 audio task (I2S), called from setup() LAST
+void msxKeyMatrix(uint8_t row, uint8_t col, bool down);  // on-screen/USB keyboard -> MSX key matrix
+void msxSetInput(uint8_t joyMask);        // joystick -> MSX joystick (PSG port A, active-low)
+bool msxLoadSelected(const char *path);   // settings: load a .rom cartridge + reset the MSX
+void msxScanFiles();                      // settings: rescan SD root for *.rom / *.dsk
+bool msxRenderLoadWarning();              // startup no-BIOS / C-BIOS note overlay (true while showing)
+void loadMsxFilesSync();                  // scan SD root -> msxFiles (ROM/disk browser)
+
 // SID sound (src/c64/c64_sid.cpp)
 void sidSetup();                       // init the 3-voice synth + I2S DAC output task
 void sidWrite(uint8_t reg, uint8_t val);

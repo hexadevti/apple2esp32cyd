@@ -204,9 +204,51 @@ static void oskBuildLayoutC64()
   oskAddKeyM(COLX, r5y, COLW, OSK_ROWH, 0, 0, OSK_ACT_F7, 0, 3);
 }
 
+// MSX keyboard, mapped to the 8x11 PPI matrix (mcol = column 0-7, mrow = row 0-10). Same visual
+// arrangement as the C64 layout; SHIFT/CTRL are sticky modifiers applied to the next key. MSX has
+// real arrow keys (matrix row 8), so no SHIFT+cursor trickery. Reuses oskAddRowC64 (it just stores
+// the matrix col/row per key). See the MSX matrix table in src/msx/msx_ppi.cpp.
+static void oskBuildLayoutMsx()
+{
+  oskKeyCount = 0;
+  const int16_t r1y = OSK_Y, r2y = OSK_Y + OSK_ROWH, r3y = OSK_Y + 2 * OSK_ROWH,
+                r4y = OSK_Y + 3 * OSK_ROWH, r5y = OSK_Y + 4 * OSK_ROWH;
+  const int16_t KBW = 264, COLX = KBW, COLW = 320 - KBW;
+
+  static const int8_t c1[] = {1,2,3,4,5,6,7,0,1,0}, q1[] = {0,0,0,0,0,0,0,1,1,0};   // 1234567890
+  oskAddRowC64("1234567890", c1, q1, r1y, 0, 238);
+  oskAddKeyM(238, r1y, 26, OSK_ROWH, 0, 0, OSK_ACT_DEL, 5, 7);                       // BS (row7,col5)
+
+  static const int8_t c2[] = {6,4,2,7,1,6,2,6,4,5}, q2[] = {4,5,3,4,5,5,5,3,4,4};    // QWERTYUIOP
+  oskAddRowC64("QWERTYUIOP", c2, q2, r2y, 0, 264);
+
+  static const int8_t c3[] = {6,0,1,3,4,5,7,0,1}, q3[] = {2,5,3,3,3,3,3,4,4};        // ASDFGHJKL
+  oskAddRowC64("ASDFGHJKL", c3, q3, r3y, 0, 229);
+  oskAddKeyM(229, r3y, 35, OSK_ROWH, 0, 0, OSK_ACT_RETURN, 7, 7);                    // RETURN (row7,col7)
+
+  static const int8_t c4[] = {7,5,0,3,7,3,2,2,3,4}, q4[] = {5,5,3,5,2,4,4,2,2,2};    // ZXCVBNM,./
+  oskAddRowC64("ZXCVBNM,./", c4, q4, r4y, 0, 264);
+
+  int16_t x = 0;
+  oskAddKey (x, r5y, 36, OSK_ROWH, 0,   0,   OSK_ACT_SHIFT);          x += 36;       // sticky SHIFT (6,0)
+  oskAddKey (x, r5y, 36, OSK_ROWH, 0,   0,   OSK_ACT_CTRL);           x += 36;       // sticky CTRL (6,1)
+  oskAddKeyM(x, r5y, 88, OSK_ROWH, ' ', ' ', OSK_ACT_SPACE,   0, 8);  x += 88;       // SPACE (row8,col0)
+  oskAddKeyM(x, r5y, 26, OSK_ROWH, 0,   0,   OSK_ACT_LEFT,    4, 8);  x += 26;       // LEFT  (row8,col4)
+  oskAddKeyM(x, r5y, 26, OSK_ROWH, 0,   0,   OSK_ACT_DOWN,    6, 8);  x += 26;       // DOWN  (row8,col6)
+  oskAddKeyM(x, r5y, 26, OSK_ROWH, 0,   0,   OSK_ACT_UP,      5, 8);  x += 26;       // UP    (row8,col5)
+  oskAddKeyM(x, r5y, 26, OSK_ROWH, 0,   0,   OSK_ACT_RIGHT,   7, 8);  x += 26;       // RIGHT (row8,col7)
+
+  oskAddKey (COLX, r1y, COLW, OSK_ROWH, 0, 0, OSK_ACT_MENU);
+  oskAddKeyM(COLX, r2y, COLW, OSK_ROWH, 0, 0, OSK_ACT_F1, 5, 6);                     // F1 (row6,col5)
+  oskAddKeyM(COLX, r3y, COLW, OSK_ROWH, 0, 0, OSK_ACT_F3, 6, 6);                     // F2 (row6,col6)
+  oskAddKeyM(COLX, r4y, COLW, OSK_ROWH, 0, 0, OSK_ACT_F5, 7, 6);                     // F3 (row6,col7)
+  oskAddKeyM(COLX, r5y, COLW, OSK_ROWH, 0, 0, OSK_ACT_ESC, 2, 7);                    // ESC (row7,col2)
+}
+
 void oskBuildLayout()
 {
   if (currentPlatform == PLATFORM_C64) { oskBuildLayoutC64(); return; }
+  if (currentPlatform == PLATFORM_MSX) { oskBuildLayoutMsx(); return; }
 
   oskKeyCount = 0;
 
@@ -513,9 +555,35 @@ static void oskC64Up(int i)
   c64KeyMatrix(7, 1, false);   // release SHIFT (re-applied per key while sticky-shift is on)
 }
 
+// MSX: press a key into the 8x11 PPI matrix (+ sticky SHIFT (6,0) / CTRL (6,1)). Released in oskPoll.
+static void oskMsxDown(int i)
+{
+  const OskKey &k = oskKeys[i];
+  if (k.act == OSK_ACT_HIDE)  { oskHide(); return; }
+  if (k.act == OSK_ACT_MENU)  { oskHide(); showHideOptionsWindow(); return; }
+  if (k.act == OSK_ACT_SHIFT) { osk_shift = !osk_shift; osk_dirty = true; oskRender(); return; }
+  if (k.act == OSK_ACT_CTRL)  { osk_ctrl  = !osk_ctrl;  osk_dirty = true; oskRender(); return; }
+  if (k.mcol >= 0) msxKeyMatrix(k.mrow, k.mcol, true);
+  if (osk_shift) msxKeyMatrix(6, 0, true);   // SHIFT (row6,col0)
+  if (osk_ctrl)  msxKeyMatrix(6, 1, true);   // CTRL  (row6,col1)
+  osk_pressedIdx = i;
+  oskDrawKey(i, true);
+}
+
+static void oskMsxUp(int i)
+{
+  const OskKey &k = oskKeys[i];
+  if (k.mcol >= 0) msxKeyMatrix(k.mrow, k.mcol, false);
+  msxKeyMatrix(6, 0, false);
+  msxKeyMatrix(6, 1, false);
+  if (osk_shift) { osk_shift = false; osk_dirty = true; }   // sticky modifiers consumed by one key
+  if (osk_ctrl)  { osk_ctrl  = false; osk_dirty = true; }
+}
+
 static void oskHandleKey(int i)
 {
   if (currentPlatform == PLATFORM_C64) { oskC64Down(i); return; }
+  if (currentPlatform == PLATFORM_MSX) { oskMsxDown(i); return; }
 
   const OskKey &k = oskKeys[i];
   switch (k.act) {
@@ -618,6 +686,7 @@ void oskPoll()
   if (!down && osk_pressedIdx >= 0) {          // released -> clear the press highlight
     int p = osk_pressedIdx;
     if (currentPlatform == PLATFORM_C64) oskC64Up(p);   // release the matrix bits
+    else if (currentPlatform == PLATFORM_MSX) oskMsxUp(p);
     osk_pressedIdx = -1;
     oskDrawKey(p, false);
   }

@@ -89,14 +89,14 @@ uint16_t last_x = 0;
 #define SPLASH_MS    12000   // generous: time to read the menu and tap a platform
 #define SPLASH_BTN_Y 164
 #define SPLASH_BTN_H 44
-static const int splashBtnX[5] = {6, 68, 130, 192, 254};   // pulled in from the right edge (touch is
-static const int splashBtnW    = 58;                       // less reliable at the extreme right)
-static const char *splashLabels[5] = {"APPLE", "C64", "NES", "ATARI", "IIGS"};
+static const int splashBtnX[6] = {4, 56, 108, 160, 212, 264};   // six platforms across the 320px panel
+static const int splashBtnW    = 50;                            // (49px + ~1px gap; was 58 for five)
+static const char *splashLabels[6] = {"APPLE", "C64", "NES", "ATARI", "IIGS", "MSX"};
 
 static int splashHitTest(int16_t x, int16_t y)
 {
   if (y < SPLASH_BTN_Y || y >= SPLASH_BTN_Y + SPLASH_BTN_H) return -1;
-  for (int i = 0; i < 5; i++)
+  for (int i = 0; i < 6; i++)
     if (x >= splashBtnX[i] && x < splashBtnX[i] + splashBtnW) return i;
   return -1;
 }
@@ -112,7 +112,8 @@ static void splashDrawBtn(int i, const char *label, bool enabled)
   tft.drawRoundRect(x, y, w, h, 6, active ? TFT_WHITE : tft.color565(70, 78, 92));
   tft.setTextDatum(MC_DATUM);
   tft.setTextColor(enabled ? TFT_WHITE : tft.color565(110, 118, 130), face);
-  tft.drawString(label, x + w / 2, enabled ? y + h / 2 : y + h / 2 - 6, 2);
+  int lblFont = (strlen(label) >= 5) ? 1 : 2;   // 50px buttons: shrink 5-char labels (APPLE/ATARI) to fit
+  tft.drawString(label, x + w / 2, enabled ? y + h / 2 : y + h / 2 - 6, lblFont);
   if (!enabled) {
     tft.setTextColor(tft.color565(110, 118, 130), face);
     tft.drawString("SOON", x + w / 2, y + h - 12, 1);
@@ -167,6 +168,7 @@ static void splashService()
     splashDrawBtn(PLATFORM_NES,    "NES",    true);
     splashDrawBtn(PLATFORM_ATARI,  "ATARI",  true);
     splashDrawBtn(PLATFORM_IIGS,   "IIGS",   true);
+    splashDrawBtn(PLATFORM_MSX,    "MSX",    true);
     drawn = true;
   }
 
@@ -178,6 +180,7 @@ static void splashService()
     else if (b == PLATFORM_NES)   splashSelect(PLATFORM_NES);
     else if (b == PLATFORM_ATARI) splashSelect(PLATFORM_ATARI);
     else if (b == PLATFORM_IIGS)  splashSelect(PLATFORM_IIGS);
+    else if (b == PLATFORM_MSX)   splashSelect(PLATFORM_MSX);
     else if (b < 0)               splashFinish();   // tapped outside -> boot current
     return;
   }
@@ -235,6 +238,14 @@ void renderLoop(void *pvParameters)
 
     // Atari 2600 startup ROM-skip warning (same idea as the NES overlay above).
     if (currentPlatform == PLATFORM_ATARI && atariRenderLoadWarning())
+    {
+      Vertical_blankingOn_Off = true;
+      vTaskDelay(pdMS_TO_TICKS(20));
+      continue;
+    }
+
+    // MSX startup overlay: hard error if no BIOS, or a brief "C-BIOS = no Disk BASIC" note.
+    if (currentPlatform == PLATFORM_MSX && msxRenderLoadWarning())
     {
       Vertical_blankingOn_Off = true;
       vTaskDelay(pdMS_TO_TICKS(20));
@@ -310,6 +321,23 @@ void renderLoop(void *pvParameters)
       displaySetVideoRect(24, 192);      // TIA picture is 192 lines centered in 240 (24px borders)
       displaySetVideoFill(0, 320, true); // fill-screen stretches the full-width 320x192 picture to 100% (no aspect/bars)
       atariRenderFrame();
+      Vertical_blankingOn_Off = true;
+      vTaskDelay(pdMS_TO_TICKS(10));
+      continue;
+    }
+
+    // MSX1 core: the Z80 (core 1) runs the BIOS/BASIC; the VDP fills a 256x192 framebuffer that we
+    // convert + push here, centered with 32px side borders + 24px top/bottom (like NES/Atari).
+    if (currentPlatform == PLATFORM_MSX)
+    {
+#if BOARD_DISPLAY_GFX
+      if (clearScr) { tft.fillScreen(TFT_BLACK); clearScr = false; }   // wipe border after a menu
+#endif
+      displaySetUiMode(false);
+      displaySetVideoRect(24, 192);      // 192 active lines centered in 240
+      displaySetVideoFill(32, 256, true);// 256-wide picture starting at x=32
+      msxRenderFrame();
+      if (oskActive()) { displaySetUiMode(true); oskRender(); }   // on-screen keyboard overlays the bottom
       Vertical_blankingOn_Off = true;
       vTaskDelay(pdMS_TO_TICKS(10));
       continue;

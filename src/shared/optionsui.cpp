@@ -82,12 +82,14 @@ static bool ouiIsC64() { return currentPlatform == PLATFORM_C64; }
 static bool ouiIsNES() { return currentPlatform == PLATFORM_NES; }
 static bool ouiIsAtari() { return currentPlatform == PLATFORM_ATARI; }
 static bool ouiIsIIgs() { return currentPlatform == PLATFORM_IIGS; }   // shares the Apple grid, minus MACHINE
+static bool ouiIsMsx() { return currentPlatform == PLATFORM_MSX; }     // ROM/disk browser like NES/Atari
 
 static std::vector<std::string> &ouiFiles()
 {
   if (ouiIsC64()) return c64Files;
   if (ouiIsNES()) return nesFiles;
   if (ouiIsAtari()) return atariFiles;
+  if (ouiIsMsx()) return msxFiles;
   return HdDisk ? hdFiles : diskFiles;
 }
 
@@ -96,6 +98,7 @@ static std::string ouiSel()
   if (ouiIsC64()) return std::string(selectedC64FileName.c_str());
   if (ouiIsNES()) return std::string(selectedNesFileName.c_str());
   if (ouiIsAtari()) return std::string(selectedAtariFileName.c_str());
+  if (ouiIsMsx()) return std::string(selectedMsxFileName.c_str());
   return std::string((HdDisk ? selectedHdFileName : selectedDiskFileName).c_str());
 }
 
@@ -207,7 +210,18 @@ static void ouiDrawToggles()
     ouiDrawScreenToggle();
     return;
   }
-  if (ouiIsNES() || ouiIsAtari()) {          // NES / Atari grid: SOUND / JOYSTICK / VIDEO
+  if (ouiIsMsx()) {                           // MSX grid: SOUND / JOYSTICK / VIDEO / SPEED + Z80 readout
+    char mhz[12]; snprintf(mhz, sizeof(mhz), "%.1fMHz", msxMeasuredMhz);
+    ouiDrawToggle(0, "SOUND",    sound ? "ON" : "MUTE",          OUI_TXT);
+    ouiDrawToggle(1, "JOYSTICK", joystick ? "ON" : "OFF",        OUI_TXT);
+    ouiDrawToggle(2, "VIDEO",    videoColor ? "COLOR" : "MONO",  OUI_TXT);
+    ouiDrawToggle(3, "SPEED",    msxFast ? "FAST" : "NORMAL",    OUI_TXT);
+    ouiDrawToggle(4, "Z80",      mhz,                            OUI_TXT);   // measured uncapped speed (read-only)
+    for (int i = 5; i < 8; i++) ouiClearToggle(i);
+    ouiDrawScreenToggle();
+    return;
+  }
+  if (ouiIsNES() || ouiIsAtari()) {           // NES / Atari grid: SOUND / JOYSTICK / VIDEO
     ouiDrawToggle(0, "SOUND",    sound ? "ON" : "MUTE",          OUI_TXT);
     ouiDrawToggle(1, "JOYSTICK", joystick ? "ON" : "OFF",        OUI_TXT);
     ouiDrawToggle(2, "VIDEO",    videoColor ? "COLOR" : "MONO",  OUI_TXT);
@@ -273,6 +287,7 @@ static void ouiDrawFiles()
   char hdr[40];
   sprintf(hdr, "%s  (%d)", ouiIsC64() ? "PRG/D64/CRT" : ouiIsNES() ? "NES ROMS"
                          : ouiIsAtari() ? "A26/BIN ROMS"
+                         : ouiIsMsx() ? "MSX ROM/DSK"
                          : (HdDisk ? "HD IMAGES" : "DISK IMAGES"),
           (int)files.size());
   tft.setTextDatum(BL_DATUM);
@@ -352,7 +367,7 @@ static void ouiDrawActions()
   uint16_t mc = canMount ? OUI_MOUNT : OUI_CARD2;
   uint16_t mt = canMount ? OUI_TXT : OUI_LBL;
 
-  if (ouiIsC64() || ouiIsNES() || ouiIsAtari()) {   // C64/NES/Atari: LOAD & RUN + REBOOT
+  if (ouiIsC64() || ouiIsNES() || ouiIsAtari() || ouiIsMsx()) {   // C64/NES/Atari/MSX: LOAD & RUN + REBOOT
     ouiActBtn(6,   120, "LOAD & RUN", mc,         mt,      OUI_FOC_MOUNT);
     ouiActBtn(132, 182, "REBOOT",     OUI_REBOOT, OUI_TXT, OUI_FOC_REBOOT);
     return;
@@ -370,7 +385,8 @@ static void ouiDrawTitle()
   tft.setTextColor(OUI_TXT, OUI_TITLE);
   tft.drawString(ouiIsC64() ? "COMMODORE 64  SETTINGS"
                : ouiIsNES() ? "NINTENDO  NES  SETTINGS"
-               : ouiIsAtari() ? "ATARI 2600  SETTINGS" : "APPLE II  SETTINGS",
+               : ouiIsAtari() ? "ATARI 2600  SETTINGS"
+               : ouiIsMsx() ? "MSX1  SETTINGS" : "APPLE II  SETTINGS",
                  10, OUI_TITLE_H / 2, 2);
   int cw = OUI_TITLE_H, cx = 320 - cw;
   tft.fillRect(cx, 0, cw, OUI_TITLE_H, OUI_RED);
@@ -452,11 +468,20 @@ static void ouiDrawHelp()
     ouiHelpRow(y, "Start", "Reset");
   } else if (ouiIsC64()) {
     ouiHelpHdr(y, "C64  -  KEYBOARD");
-    ouiHelpRow(y, "Keys",   "C64 layout");
-    ouiHelpRow(y, "Arrows", "Cursor");
+    ouiHelpRow(y, "Keys",      "C64 layout");
+    ouiHelpRow(y, "Arrows",    "Cursor (JOY off)");
+    ouiHelpRow(y, "Arr+Space", "Joystick (JOY on)");
     ouiHelpHdr(y, "C64  -  GAMEPAD");
     ouiHelpRow(y, "D-pad", "Stick");
     ouiHelpRow(y, "A",     "Fire");
+  } else if (ouiIsMsx()) {
+    ouiHelpHdr(y, "MSX  -  KEYBOARD");
+    ouiHelpRow(y, "Keys",      "MSX layout");
+    ouiHelpRow(y, "Arrows",    "Cursor / Joystick");
+    ouiHelpRow(y, "Space",     "Trigger / Space");
+    ouiHelpHdr(y, "MSX  -  GAMEPAD");
+    ouiHelpRow(y, "D-pad", "Stick");
+    ouiHelpRow(y, "A / B", "Trigger A / B");
   } else {   // Apple II / IIGS
     ouiHelpHdr(y, "APPLE  -  KEYBOARD");
     ouiHelpRow(y, "Keys",   "Type into Apple");
@@ -507,7 +532,18 @@ static void ouiToggle(int idx)
     optionsUiDirty = true;
     return;
   }
-  if (ouiIsNES() || ouiIsAtari()) {        // NES / Atari grid: SOUND / JOYSTICK / VIDEO (+ SKIP on NES)
+  if (ouiIsMsx()) {                       // MSX grid: SOUND / JOYSTICK / VIDEO / SPEED (Z80 readout = read-only)
+    switch (idx) {
+      case 0: sound = !sound;           break;
+      case 1: joystick = !joystick;     break;
+      case 2: videoColor = !videoColor; break;
+      case 3: msxFast = !msxFast;       break;   // NORMAL (3.58 MHz) <-> FAST (uncapped)
+      default: return;                            // slot 4 (Z80 MHz) is read-only
+    }
+    optionsUiDirty = true;
+    return;
+  }
+  if (ouiIsNES() || ouiIsAtari()) {       // NES / Atari grid: SOUND / JOYSTICK / VIDEO (+ SKIP on NES)
     switch (idx) {
       case 0: sound = !sound;           break;
       case 1: joystick = !joystick;     break;
@@ -592,6 +628,12 @@ static void ouiMount()
     if (shownFile >= files.size()) return;
     if (atariLoadSelected(files[shownFile].c_str()))
       showHideOptionsWindow();            // close only on success (failure keeps the old ROM)
+    return;
+  }
+  if (ouiIsMsx()) {                        // MSX: load the highlighted .rom cartridge + reset into it
+    if (shownFile >= files.size()) return;
+    if (msxLoadSelected(files[shownFile].c_str()))
+      showHideOptionsWindow();            // close only on success (failure keeps the old cart)
     return;
   }
   if (ouiIsIIgs()) {                       // IIGS: persist the highlighted image + reboot -> auto-mounted on boot
@@ -725,7 +767,7 @@ static void ouiHandleTap(int16_t x, int16_t y)
 
   // action buttons
   if (y >= OUI_ACT_TOP && y < OUI_ACT_TOP + OUI_ACT_H) {
-    if (ouiIsC64() || ouiIsNES() || ouiIsAtari()) {   // LOAD & RUN (6..126) | REBOOT (132..314)
+    if (ouiIsC64() || ouiIsNES() || ouiIsAtari() || ouiIsMsx()) {   // LOAD & RUN (6..126) | REBOOT (132..314)
       if (x >= 6 && x < 126)        ouiMount();
       else if (x >= 132 && x < 314) ouiReboot();
     } else {                                // MOUNT (4..106) | M+REBOOT (109..211) | REBOOT (214..316)
@@ -757,6 +799,7 @@ void optionsUiOpen()
   if (ouiIsC64() && c64Files.empty()) loadC64FilesSync();   // populate the .prg browser
   if (ouiIsNES() && nesFiles.empty()) nesScanFiles();       // populate the .nes browser
   if (ouiIsAtari() && atariFiles.empty()) atariScanFiles(); // populate the .a26/.bin browser
+  if (ouiIsMsx() && msxFiles.empty()) msxScanFiles();       // populate the .rom/.dsk browser
   optionsUiSyncSelection();
   optionsUiFocus       = 0;
   ouiHelpOpen          = false;  // always open on the settings page, not the help overlay

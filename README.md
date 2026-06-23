@@ -143,6 +143,7 @@ USB keyboard mapping (works on every platform):
 | `F11` | Apple / IIGS **Reset** (CPU reset) |
 | NES: arrows + `X`=A · `Z`=B · `Enter`=Start · `Tab`=Select | NES controller 1 |
 | Atari: arrows + `Space`/`X`=Fire · `Enter`=Reset · `Tab`=Select | Atari stick + console switches |
+| C64 (when **JOYSTICK** is on): arrows + `Space`=Fire | C64 joystick (port per **JOY PORT**) |
 
 > Only keyboards that expose the standard HID **boot** protocol are decoded, and one USB device works at
 > a time (no hub). The native USB port has no VBUS switching, so **hot-swapping devices needs a tap of
