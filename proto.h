@@ -40,6 +40,11 @@ void optionsScreenRender();
 void speakerSetup();
 void speakerToggle();
 
+// audio_amp.cpp (no-DAC boards / ESP32-S3): external I2S amp output the audio cores feed into
+void ampBegin(int sampleRate);
+void ampWriteDac8(const uint16_t *dacBuf, int n);   // 8-bit DAC (value in high byte) -> 16-bit amp
+void ampWriteMono(const int16_t *mono, int n);      // 16-bit signed mono -> amp (Apple speaker)
+
 // keyboardPs2.cpp
 unsigned char keyboard_read();
 void keyboardStrobe();
@@ -49,6 +54,17 @@ void keyboard_bit();
 // joystick.cpp
 void processJoystick(float speedAdjust);
 void joystickSetup();
+void applyPlatformInput();   // push joyX/joyY/Pb0-3 to the active core (shared: analog + USB)
+
+// usbgamepad.cpp (JC4827W543 / ESP32-S3 only): USB-HID host SNES gamepad -> joyX/joyY/Pb0-3
+void usbGamepadSetup();
+
+#if BOARD_INPUT_USB
+// usbkeyboard.cpp (JC4827W543 / ESP32-S3 only): USB-HID host keyboard -> active platform.
+// keys/last are the 6-key rollover arrays of the current and previous boot report.
+void usbKeyboardReport(uint8_t modifier, const uint8_t *keys, const uint8_t *last);
+void usbKeyboardReset();   // release held keys on device disconnect
+#endif
 
 // touchkeyboard.cpp
 void oskBuildLayout();
@@ -75,6 +91,9 @@ int red(int color);
 int green(int color);
 int blue(int color);
 void renderLoop(void *pvParameters);
+void displayFlush();   // push the rendered frame to the panel (Arduino_GFX canvas); no-op on TFT_eSPI
+void displaySetUiMode(bool ui);   // true=UI scaled to full panel, false=emulator video centered; no-op on TFT_eSPI
+void displaySetVideoRect(int topLogical, int hLogical);   // active video content rect (for fill-screen); no-op on TFT_eSPI
 
 // --- Apple II core ---
 // cpu.cpp
@@ -179,6 +198,13 @@ void atariRenderFrame();
 void atariSetInput(uint8_t dirBits, bool fire, bool select, bool reset);  // stick + Fire/Select/Reset
 bool atariRenderLoadWarning();            // startup ROM-skip warning overlay (true while showing)
 void atariAudioSetup();                   // TIA audio (I2S DAC GPIO26), called from setup()
+
+// Apple IIGS core entry points (src/iigs/iigs_boot.cpp), called by the platform dispatch
+void iigsSetup();                         // alloc banks + embedded ROM 01 + reset 65C816
+void iigsLoop();                          // run the CPU (from loop())
+void iigsRenderText();                    // draw the 40-col text page to the LCD (from renderLoop)
+void iigsLoadDisk(const char *path);      // settings: load a .dsk from SD into PSRAM + reboot to boot it
+void iigsLoadHD(const char *path);        // settings: load a .po/.2mg/.hdv block image (slot 7) + reboot
 bool atariLoadSelected(const char *path); // settings: load a .a26/.bin ROM + reset the 2600
 void atariScanFiles();                    // settings: rescan SD root for *.a26 / *.bin
 

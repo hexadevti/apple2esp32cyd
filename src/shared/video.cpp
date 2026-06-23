@@ -17,6 +17,14 @@ int height = 192;
 static StaticTask_t renderTaskTCB;
 static StackType_t  renderTaskStack[8192];
 
+#if !BOARD_DISPLAY_GFX
+// On TFT_eSPI boards drawing goes straight to the 320x240 panel; the canvas flush and the
+// UI/video mode switch are no-ops. (The Arduino_GFX boards define these in display_gfx.cpp.)
+void displayFlush() {}
+void displaySetUiMode(bool) {}
+void displaySetVideoRect(int, int) {}
+#endif
+
 void videoSetup()
 {
   printLog("Video Setup...");
@@ -61,16 +69,16 @@ uint16_t last_x = 0;
 // (switching to a different one saves to EEPROM and reboots so setup() can init it);
 // tapping elsewhere, a joystick button, or the timeout boots the current platform.
 // Runs on core 0 from renderLoop (which owns the TFT).
-#define SPLASH_MS    3000
+#define SPLASH_MS    12000   // generous: time to read the menu and tap a platform
 #define SPLASH_BTN_Y 164
 #define SPLASH_BTN_H 44
-static const int splashBtnX[4] = {4, 82, 160, 238};
-static const int splashBtnW    = 74;
+static const int splashBtnX[5] = {6, 68, 130, 192, 254};   // pulled in from the right edge (touch is
+static const int splashBtnW    = 58;                       // less reliable at the extreme right)
 
 static int splashHitTest(int16_t x, int16_t y)
 {
   if (y < SPLASH_BTN_Y || y >= SPLASH_BTN_Y + SPLASH_BTN_H) return -1;
-  for (int i = 0; i < 4; i++)
+  for (int i = 0; i < 5; i++)
     if (x >= splashBtnX[i] && x < splashBtnX[i] + splashBtnW) return i;
   return -1;
 }
@@ -104,6 +112,15 @@ static void splashSelect(uint8_t platform)
   if (platform == currentPlatform) { splashFinish(); return; }
   currentPlatform = platform;        // switching platforms needs a reboot to re-init
   saveConfig();
+  // ESP.restart() (an on-chip reset from firmware) reboots this board cleanly - unlike the host-side
+  // RTS reset which wedges it. Brief confirmation, then reboot; setup() inits the saved platform.
+  tft.setUiMode(true);
+  tft.fillScreen(TFT_BLACK);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.drawString("LOADING...", 160, 110, 2);
+  displayFlush();
+  delay(700);
   ESP.restart();
 }
 
@@ -124,6 +141,7 @@ static void splashService()
     splashDrawBtn(PLATFORM_C64,    "C64",    true);
     splashDrawBtn(PLATFORM_NES,    "NES",    true);
     splashDrawBtn(PLATFORM_ATARI,  "ATARI",  true);
+    splashDrawBtn(PLATFORM_IIGS,   "IIGS",   true);
     drawn = true;
   }
 
@@ -134,6 +152,7 @@ static void splashService()
     else if (b == PLATFORM_C64)   splashSelect(PLATFORM_C64);
     else if (b == PLATFORM_NES)   splashSelect(PLATFORM_NES);
     else if (b == PLATFORM_ATARI) splashSelect(PLATFORM_ATARI);
+    else if (b == PLATFORM_IIGS)  splashSelect(PLATFORM_IIGS);
     else if (b < 0)               splashFinish();   // tapped outside -> boot current
     return;
   }
@@ -145,16 +164,40 @@ void renderLoop(void *pvParameters)
 
   while (running)
   {
+    // Push the previous iteration's frame to the panel. On Arduino_GFX boards the cores draw
+    // into a PSRAM canvas and this streams it over QSPI; on TFT_eSPI boards it is a no-op
+    // (drawing went straight to the panel). Flushing at the top covers every render path below,
+    // each of which ends in its own `continue`.
+    displayFlush();
+
+#if BOARD_DISPLAY_GFX
+    // When a full-screen menu just closed, request a full-panel wipe so no UI remnants linger in
+    // the black border around the centered emulator video. (TFT_eSPI boards have no border.)
+    static bool prevOptions = false;
+    if (prevOptions && !OptionsWindow) clearScr = true;
+    prevOptions = OptionsWindow;
+    // Reset the NES direct-to-panel bypass each iteration. The NES video branch re-arms it after it
+    // pushes its frame straight to the panel, so the displayFlush() above no-ops on the frame AFTER a
+    // direct NES draw (nothing in the canvas to flush) but runs normally for UI / menus / C64 / Atari.
+    tft.setBypassCanvas(false);
+#endif
+
     Vertical_blankingOn_Off = false;
     unsigned long startTime = millis();
 
     // Boot splash takes over the screen until it times out / is dismissed.
     if (splashActive)
     {
+      displaySetUiMode(true);
       splashService();
       vTaskDelay(pdMS_TO_TICKS(15));
       continue;
     }
+
+    // Everything below the splash draws in UI mode by default (full-screen menus, warnings, the
+    // on-screen keyboard); the per-platform emulator-video sections switch to video mode (centered
+    // 320x240) just before they draw, and back to UI for any keyboard overlay.
+    displaySetUiMode(true);
 
     // NES startup ROM-skip warning: hold a full-screen note (skipped/over-budget ROMs) for a few
     // seconds after boot, before normal rendering / touch handling kicks in.
@@ -190,8 +233,13 @@ void renderLoop(void *pvParameters)
     // C64 core renders its own framebuffer (push to TFT); skip the Apple raster.
     if (currentPlatform == PLATFORM_C64)
     {
+#if BOARD_DISPLAY_GFX
+      if (clearScr) { tft.fillScreen(TFT_BLACK); clearScr = false; }   // wipe border after a menu
+#endif
+      displaySetUiMode(false);
+      displaySetVideoRect(20, 200);      // VIC-II screen is 200 lines (logical y 20..220); fill-screen scales that
       c64RenderFrame();                  // text screen (top 14 rows when the OSK is open)
-      if (oskActive()) oskRender();      // touch keyboard owns the bottom of the screen
+      if (oskActive()) { displaySetUiMode(true); oskRender(); }  // keyboard owns the bottom (UI)
       Vertical_blankingOn_Off = true;
       vTaskDelay(pdMS_TO_TICKS(10));
       continue;
@@ -201,7 +249,25 @@ void renderLoop(void *pvParameters)
     // convert + push it here, pillarboxed in the 320-wide panel.
     if (currentPlatform == PLATFORM_NES)
     {
-      nesRenderFrame();
+#if BOARD_DISPLAY_GFX
+      // Wipe the WHOLE panel (not just the canvas) after a menu: the NES fast path bypasses the canvas
+      // flush, so a canvas-only fillScreen would never reach the panel and menu remnants would linger.
+      if (clearScr) { tft.fillScreen(TFT_BLACK); tft.fillPanelBlack(); clearScr = false; }
+      // Display-skip: present the panel only every Nth core-0 pass. Skipping the convert+push frees
+      // core-0 bus time that was contending with the core-1 interpreter, so the GAME runs faster at
+      // the cost of a choppier picture. 1 = every frame (smoothest); 2-3 = faster game, lower visual fps.
+      static uint32_t nesDispCtr = 0;
+      uint8_t skipN = (nesDisplaySkip < 1) ? 1 : nesDisplaySkip;   // global, set in NES options; guard /0
+      bool nesDraw = ((nesDispCtr++ % skipN) == 0);
+#else
+      bool nesDraw = true;
+#endif
+      displaySetUiMode(false);
+      displaySetVideoRect(0, 240);       // NES fills the full 240 height (only pillarboxed horizontally)
+      if (nesDraw) nesRenderFrame();
+#if BOARD_DISPLAY_GFX
+      else tft.setBypassCanvas(true);    // skipped frame: keep the flush a no-op, leave the last frame up
+#endif
       Vertical_blankingOn_Off = true;
       vTaskDelay(pdMS_TO_TICKS(10));
       continue;
@@ -211,9 +277,27 @@ void renderLoop(void *pvParameters)
     // convert + push it here, doubled to 320 wide with top/bottom borders.
     if (currentPlatform == PLATFORM_ATARI)
     {
+#if BOARD_DISPLAY_GFX
+      if (clearScr) { tft.fillScreen(TFT_BLACK); clearScr = false; }   // wipe border after a menu
+#endif
+      displaySetUiMode(false);
+      displaySetVideoRect(24, 192);      // TIA picture is 192 lines centered in 240 (24px borders)
       atariRenderFrame();
       Vertical_blankingOn_Off = true;
       vTaskDelay(pdMS_TO_TICKS(10));
+      continue;
+    }
+
+    // Apple IIGS: the 65C816 (core 1) runs the firmware; draw its 40-col text page here.
+    if (currentPlatform == PLATFORM_IIGS)
+    {
+#if BOARD_DISPLAY_GFX
+      if (clearScr) { tft.fillScreen(TFT_BLACK); clearScr = false; }
+#endif
+      iigsRenderText();                  // UI-mode text (sets fillScreen + drawString); flush at loop top
+      if (oskActive()) { displaySetUiMode(true); oskRender(); }   // on-screen keyboard overlays the bottom
+      Vertical_blankingOn_Off = true;
+      vTaskDelay(pdMS_TO_TICKS(33));      // ~30 fps text refresh
       continue;
     }
 
@@ -221,10 +305,12 @@ void renderLoop(void *pvParameters)
     // When the touch keyboard is open, squeeze the raster into the top rows so the
     // emulated screen stays live above the keyboard; the vertical scaler (coef192)
     // and the matching setAddrWindow height handle the squeeze automatically.
+    displaySetUiMode(false);   // Apple raster is emulator video: centered 320x240 on the panel
     margin_x = 20;
     margin_y = oskRasterTop();
     screen_width = 280;
     screen_height = oskRasterHeight();
+    displaySetVideoRect(margin_y, (int)screen_height);   // Apple raster (192 lines at margin_y); fill-screen scales just that
     last_y = margin_y;
     last_x = margin_x;
 
@@ -289,9 +375,14 @@ void renderLoop(void *pvParameters)
     //   }
     // }
     if (clearScr) {
-      // Clear the whole 320x240 panel (not just the 315-wide text area) so closing
-      // the options window leaves no window remnants in the edge columns.
+#if BOARD_DISPLAY_GFX
+      // Clear the WHOLE panel (incl. the border around the centered video) so closing the options
+      // window / leaving the splash leaves no remnants. (Canvas fill, no SPI transaction.)
+      tft.fillScreen(colors[0]);
+#else
+      // CYD: clear the 320x240 panel within the active addr-window write transaction.
       tft.writeColor(colors[0], (uint32_t)320 * 240);
+#endif
       clearScr = false;
     }
     else if (OptionsWindow || DebugWindow) 
@@ -738,7 +829,7 @@ void renderLoop(void *pvParameters)
     // Draw the touch keyboard over the bottom rows (only when it changed). The
     // squeezed raster above never touches this region, so one draw per change is
     // enough and there is no flicker.
-    if (oskActive()) oskRender();
+    if (oskActive()) { displaySetUiMode(true); oskRender(); }
     Vertical_blankingOn_Off = true;
     unsigned long endTime3 = millis();
     vTaskDelay(pdMS_TO_TICKS(5));
