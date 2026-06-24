@@ -471,6 +471,66 @@ static void pcxtRenderGraphics(fabgl::GraphicsAdapter::Emulation emu) {
   tft.setSwapBytes(false);
 }
 
+// ---- CP437 line/block/shade glyphs (0xB0-0xDF) drawn as CONNECTING primitives ----
+// The 5x7 GFX font draws box-drawing chars too small to touch cell edges, so borders don't join.
+// These 48 codes are pure graphics: draw them as bars that reach the cell edges (adjacent cells share
+// the boundary coordinate, so the lines connect — true in native too, since the shared logical edge
+// maps to one native pixel). Arm table for the line chars 0xB3..0xDA: 2 bits/arm (0=none,1=single,
+// 2=double) in U,D,L,R order.
+#define ARM(u,d,l,r) ((u)|((d)<<2)|((l)<<4)|((r)<<6))
+static const uint8_t kCgaArms[0xDA - 0xB3 + 1] = {
+  /*B3*/ARM(1,1,0,0),/*B4*/ARM(1,1,1,0),/*B5*/ARM(1,1,2,0),/*B6*/ARM(2,2,1,0),
+  /*B7*/ARM(0,2,1,0),/*B8*/ARM(0,1,2,0),/*B9*/ARM(2,2,2,0),/*BA*/ARM(2,2,0,0),
+  /*BB*/ARM(0,2,2,0),/*BC*/ARM(2,0,2,0),/*BD*/ARM(2,0,1,0),/*BE*/ARM(1,0,2,0),
+  /*BF*/ARM(0,1,1,0),/*C0*/ARM(1,0,0,1),/*C1*/ARM(1,0,1,1),/*C2*/ARM(0,1,1,1),
+  /*C3*/ARM(1,1,0,1),/*C4*/ARM(0,0,1,1),/*C5*/ARM(1,1,1,1),/*C6*/ARM(1,1,0,2),
+  /*C7*/ARM(2,2,0,1),/*C8*/ARM(2,0,0,2),/*C9*/ARM(0,2,0,2),/*CA*/ARM(2,0,2,2),
+  /*CB*/ARM(0,2,2,2),/*CC*/ARM(2,2,0,2),/*CD*/ARM(0,0,2,2),/*CE*/ARM(2,2,2,2),
+  /*CF*/ARM(1,0,2,2),/*D0*/ARM(2,0,1,1),/*D1*/ARM(0,1,2,2),/*D2*/ARM(0,2,1,1),
+  /*D3*/ARM(2,0,0,1),/*D4*/ARM(1,0,0,2),/*D5*/ARM(0,1,0,2),/*D6*/ARM(0,2,0,1),
+  /*D7*/ARM(2,2,1,1),/*D8*/ARM(1,1,2,2),/*D9*/ARM(1,0,1,0),/*DA*/ARM(0,1,0,1),
+};
+#undef ARM
+
+static inline bool pcIsCgaGraphic(uint8_t ch) { return ch >= 0xB0 && ch <= 0xDF; }
+
+static uint16_t pcBlend565(uint16_t fg, uint16_t bg, int num) {   // num/4 of fg over bg
+  int r = (((fg >> 11) & 31) * num + ((bg >> 11) & 31) * (4 - num)) / 4;
+  int g = (((fg >> 5) & 63) * num + ((bg >> 5) & 63) * (4 - num)) / 4;
+  int b = ((fg & 31) * num + (bg & 31) * (4 - num)) / 4;
+  return (r << 11) | (g << 5) | b;
+}
+
+// Draw a CP437 graphic glyph in the cell logical rect [x,y,w,h] with fg over the already-filled bg.
+static void pcDrawCgaGraphic(uint8_t ch, uint16_t fg, uint16_t bg, int x, int y, int w, int h) {
+  if (ch <= 0xB2) { tft.fillRect(x, y, w, h, pcBlend565(fg, bg, ch - 0xB0 + 1)); return; }  // ░▒▓
+  if (ch >= 0xDB) {                                                                          // blocks
+    switch (ch) {
+      case 0xDB: tft.fillRect(x, y, w, h, fg); break;                       // █ full
+      case 0xDC: tft.fillRect(x, y + h / 2, w, h - h / 2, fg); break;       // ▄ lower
+      case 0xDD: tft.fillRect(x, y, (w + 1) / 2, h, fg); break;             // ▌ left
+      case 0xDE: tft.fillRect(x + w / 2, y, w - w / 2, h, fg); break;       // ▐ right
+      case 0xDF: tft.fillRect(x, y, w, (h + 1) / 2, fg); break;             // ▀ upper
+    }
+    return;
+  }
+  uint8_t a = kCgaArms[ch - 0xB3];                                          // line-draw chars
+  int arm[4] = { a & 3, (a >> 2) & 3, (a >> 4) & 3, (a >> 6) & 3 };         // U,D,L,R thickness
+  int cx = x + w / 2, cy = y + h / 2, xr = x + w - 1, yb = y + h - 1;
+  for (int k = 0; k < 2; k++) {                       // vertical arms: U (edge->centre), D (centre->edge)
+    if (!arm[k]) continue;
+    int y0 = (k == 0) ? y : cy, y1 = (k == 0) ? cy : yb;
+    if (arm[k] == 1) tft.fillRect(cx, y0, 1, y1 - y0 + 1, fg);
+    else { tft.fillRect(cx - 1, y0, 1, y1 - y0 + 1, fg); tft.fillRect(cx + 1, y0, 1, y1 - y0 + 1, fg); }
+  }
+  for (int k = 2; k < 4; k++) {                       // horizontal arms: L, R
+    if (!arm[k]) continue;
+    int x0 = (k == 2) ? x : cx, x1 = (k == 2) ? cx : xr;
+    if (arm[k] == 1) tft.fillRect(x0, cy, x1 - x0 + 1, 1, fg);
+    else { tft.fillRect(x0, cy - 1, x1 - x0 + 1, 1, fg); tft.fillRect(x0, cy + 1, x1 - x0 + 1, 1, fg); }
+  }
+}
+
 // ---- CGA text render: 80x25 / 40x25 with the built-in 6x8 font (like iigsRenderText) ----
 static void pcxtRenderText() {
   tft.setUiMode(true);
@@ -507,13 +567,26 @@ static void pcxtRenderText() {
       int start = c, n = 0;
       while (c < cols && vbuf[(r * cols + c) * 2 + 1] == attr) {
         uint8_t ch = vbuf[(r * cols + c) * 2];
-        line[n++] = (ch < 0x20 || ch > 0x7E) ? ' ' : (char)ch;
+        // The GFX classic font is the full 256-glyph CP437 set (box-drawing, shading, etc.), so pass
+        // the byte through; only 0x00 (would end the C-string) and 0x0A/0x0D (the font writer treats
+        // them as newline/CR) must be mapped to a blank.
+        // CP437 line/block/shade chars (0xB0-0xDF) are drawn as connecting primitives below, so blank
+        // them here; 0x00 ends the C-string and 0x0A/0x0D are taken as newline/CR by the font writer.
+        line[n++] = (ch == 0x00 || ch == 0x0A || ch == 0x0D || pcIsCgaGraphic(ch)) ? ' ' : (char)ch;
         c++;
       }
       line[n] = 0;
       tft.fillRect(X0 + start * LCW, yTop, n * LCW, (yBot - yTop) + 1, kCgaRgb565[(attr >> 4) & 0x07]);
       tft.setTextColor(kCgaRgb565[attr & 0x0F]);   // transparent glyph over the run's bg
       tft.drawString(line, X0 + start * LCW, yTop, 1);
+    }
+    // overlay CP437 line/block/shade glyphs as connecting primitives (bg already filled above)
+    for (int cc = 0; cc < cols; cc++) {
+      uint8_t ch = vbuf[(r * cols + cc) * 2];
+      if (!pcIsCgaGraphic(ch)) continue;
+      uint8_t at = vbuf[(r * cols + cc) * 2 + 1];
+      pcDrawCgaGraphic(ch, kCgaRgb565[at & 0x0F], kCgaRgb565[(at >> 4) & 0x07],
+                       X0 + cc * LCW, yTop, LCW, (yBot - yTop) + 1);
     }
   }
 
@@ -537,7 +610,7 @@ static void pcxtRenderText() {
       int yT = (int)(mr * rowH + 0.5f), yB = (int)((mr + 1) * rowH + 0.5f);
       uint8_t a  = vbuf[(mr * cols + mc) * 2 + 1];
       uint8_t ch = vbuf[(mr * cols + mc) * 2];
-      char s[2] = { (char)((ch >= 0x20 && ch < 0x7F) ? ch : ' '), 0 };
+      char s[2] = { (char)((ch == 0x00 || ch == 0x0A || ch == 0x0D) ? ' ' : ch), 0 };
       tft.fillRect(X0 + mc * LCW, yT, LCW, (yB - yT) + 1, kCgaRgb565[a & 0x0F]);  // bg := fg (reverse)
       tft.setTextColor(kCgaRgb565[(a >> 4) & 0x07]);                             // fg := bg
       tft.drawString(s, X0 + mc * LCW, yT, 1);
