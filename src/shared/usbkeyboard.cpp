@@ -267,6 +267,18 @@ static void msxApplyJoystick(const uint8_t *keys)   // active-low: b0 up b1 down
   if (kbContains(keys, HID_KEY_SPACE))       m &= ~0x10;   // trigger A
   msxSetInput(m);
 }
+// SMS has no keyboard: map the USB keyboard straight to controller 1 (active-low, same bit order).
+static void smsApplyJoystick(const uint8_t *keys)   // b0 up b1 down b2 left b3 right b4 btn1 b5 btn2
+{
+  uint8_t m = 0xFF;
+  if (kbContains(keys, HID_KEY_ARROW_UP))    m &= ~0x01;
+  if (kbContains(keys, HID_KEY_ARROW_DOWN))  m &= ~0x02;
+  if (kbContains(keys, HID_KEY_ARROW_LEFT))  m &= ~0x04;
+  if (kbContains(keys, HID_KEY_ARROW_RIGHT)) m &= ~0x08;
+  if (kbContains(keys, HID_KEY_SPACE) || kbContains(keys, HID_KEY_Z)) m &= ~0x10;   // button 1
+  if (kbContains(keys, HID_KEY_X))           m &= ~0x20;                            // button 2
+  smsSetInput(m);
+}
 
 // ============================ public entry points ========================================
 // Called from the USB host task (usbgamepad.cpp onKeyboard) with the current and previous
@@ -302,6 +314,11 @@ void usbKeyboardReport(uint8_t modifier, const uint8_t *keys, const uint8_t *las
         (currentPlatform == PLATFORM_APPLE2 || currentPlatform == PLATFORM_IIGS)) {
       cpuReset(); continue;
     }
+    if (currentPlatform == PLATFORM_SMS) {
+      if (kc == HID_KEY_F11) { smsPauseButton(); continue; }   // SMS PAUSE -> NMI
+      if (kc == HID_KEY_F12) { smsHardReset();   continue; }   // soft power-cycle
+    }
+    if (currentPlatform == PLATFORM_PCXT && kc == HID_KEY_F12) { pcxtHardReset(); continue; }  // soft reboot
 
     switch (currentPlatform) {
       case PLATFORM_APPLE2:
@@ -310,6 +327,7 @@ void usbKeyboardReport(uint8_t modifier, const uint8_t *keys, const uint8_t *las
       case PLATFORM_NES:   nesKbBits |= nesBit(kc); nesSetController(nesKbBits); break;
       case PLATFORM_ATARI: if (atariKey(kc, true)) atariApply(); break;
       case PLATFORM_MSX:   if (!(joystick && msxIsJoyKey(kc))) msxKeyDown(kc); break;  // arrows+Space = joystick when JOY on
+      case PLATFORM_PCXT:  pcxtKeyDown(kc, shift, ctrl, alt); break;                    // USB key -> XT make scancode
     }
   }
 
@@ -325,6 +343,7 @@ void usbKeyboardReport(uint8_t modifier, const uint8_t *keys, const uint8_t *las
       case PLATFORM_NES:   nesKbBits &= ~nesBit(kc); nesSetController(nesKbBits); break;
       case PLATFORM_ATARI: if (atariKey(kc, false)) atariApply(); break;
       case PLATFORM_MSX:   if (!(joystick && msxIsJoyKey(kc))) msxKeyUp(kc); break;
+      case PLATFORM_PCXT:  pcxtKeyUp(kc); break;   // USB key -> XT break scancode
       default: break;   // Apple/IIGS keystrokes are edge-triggered (keymem); nothing to release
     }
   }
@@ -338,6 +357,19 @@ void usbKeyboardReport(uint8_t modifier, const uint8_t *keys, const uint8_t *las
     msxApplyModifiers(shift, ctrl, alt);
     if (joystick) msxApplyJoystick(keys);   // arrows + Space -> joystick
     else          msxSetInput(0xFF);        // typing mode: joystick released
+  } else if (currentPlatform == PLATFORM_SMS) {
+    smsApplyJoystick(keys);                 // joystick-only: arrows + Z/X/Space -> controller 1
+  } else if (currentPlatform == PLATFORM_PCXT) {
+    // PC needs make/break for shift/ctrl/alt (they arrive as the modifier byte, not in keys[]).
+    static uint8_t prevMod = 0;
+    static const struct { uint8_t bit; uint8_t usage; } mm[] = {
+      {0x01,0xE0},{0x02,0xE1},{0x04,0xE2},{0x10,0xE4},{0x20,0xE5} };  // LCtrl LShift LAlt RCtrl RShift
+    for (auto& e : mm) {
+      bool now = (modifier & e.bit) != 0, was = (prevMod & e.bit) != 0;
+      if (now && !was) pcxtKeyDown(e.usage, false, false, false);
+      else if (!now && was) pcxtKeyUp(e.usage);
+    }
+    prevMod = modifier;
   } else if (currentPlatform == PLATFORM_APPLE2 || currentPlatform == PLATFORM_IIGS) {
     Pb0 = (modifier & KEYBOARD_MODIFIER_LEFTALT)  != 0;   // open-apple  (paddle button 0)
     Pb1 = (modifier & KEYBOARD_MODIFIER_RIGHTALT) != 0;   // solid-apple (paddle button 1)
@@ -359,6 +391,7 @@ void usbKeyboardReset()
     msxKeyMatrix(6, 0, false); msxKeyMatrix(6, 1, false); msxKeyMatrix(6, 2, false);
     msxSetInput(0xFF);
   }
+  if (currentPlatform == PLATFORM_SMS) smsSetInput(0xFF);
 }
 
 #endif // BOARD_INPUT_USB

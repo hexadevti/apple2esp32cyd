@@ -46,7 +46,24 @@ static void IRAM_ATTR spkISR()
   if ((uint32_t)(w - spkR) < SPK_RING) {               // ring not full
     int amp = sound ? ((int)volume << 4) : 0;          // volume 0..0xF0 -> 0..~3840 (kept low: a full
                                                        // square is loud; the slider scales from here)
-    spkRing[w & (SPK_RING - 1)] = speaker_state ? (int16_t)amp : (int16_t)(-amp);
+    int16_t s;
+    if (currentPlatform == PLATFORM_PCXT) {
+      // PC-speaker: synthesize a square wave at the PIT-ch2 frequency (gated by port 0x61). A phase
+      // accumulator advances by `freq` each 44100Hz sample; one full cycle per SPK_FS, high in the
+      // first half. Silent when off (the DC blocker decays the held level -> no pop).
+      static uint32_t acc = 0;
+      int f = g_pcSpkFreq;
+      if (g_pcSpkOn && f > 0) {
+        acc += (uint32_t)f;
+        if (acc >= (uint32_t)SPK_FS) acc -= (uint32_t)SPK_FS;
+        s = (acc < (uint32_t)(SPK_FS / 2)) ? (int16_t)amp : (int16_t)(-amp);
+      } else {
+        s = 0;
+      }
+    } else {
+      s = speaker_state ? (int16_t)amp : (int16_t)(-amp);
+    }
+    spkRing[w & (SPK_RING - 1)] = s;
     spkW = w + 1;
   }
   // else: consumer briefly behind -> drop this sample (the timer runs a hair faster than the I2S,

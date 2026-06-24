@@ -89,14 +89,14 @@ uint16_t last_x = 0;
 #define SPLASH_MS    12000   // generous: time to read the menu and tap a platform
 #define SPLASH_BTN_Y 164
 #define SPLASH_BTN_H 44
-static const int splashBtnX[6] = {4, 56, 108, 160, 212, 264};   // six platforms across the 320px panel
-static const int splashBtnW    = 50;                            // (49px + ~1px gap; was 58 for five)
-static const char *splashLabels[6] = {"APPLE", "C64", "NES", "ATARI", "IIGS", "MSX"};
+static const int splashBtnX[8] = {2, 42, 82, 122, 162, 202, 242, 282};  // eight platforms across the 320px panel
+static const int splashBtnW    = 37;                                    // (37px + ~3px gap at 40px pitch)
+static const char *splashLabels[8] = {"APPLE", "C64", "NES", "ATARI", "IIGS", "MSX", "SMS", "PCXT"};
 
 static int splashHitTest(int16_t x, int16_t y)
 {
   if (y < SPLASH_BTN_Y || y >= SPLASH_BTN_Y + SPLASH_BTN_H) return -1;
-  for (int i = 0; i < 6; i++)
+  for (int i = 0; i < 8; i++)
     if (x >= splashBtnX[i] && x < splashBtnX[i] + splashBtnW) return i;
   return -1;
 }
@@ -112,7 +112,7 @@ static void splashDrawBtn(int i, const char *label, bool enabled)
   tft.drawRoundRect(x, y, w, h, 6, active ? TFT_WHITE : tft.color565(70, 78, 92));
   tft.setTextDatum(MC_DATUM);
   tft.setTextColor(enabled ? TFT_WHITE : tft.color565(110, 118, 130), face);
-  int lblFont = (strlen(label) >= 5) ? 1 : 2;   // 50px buttons: shrink 5-char labels (APPLE/ATARI) to fit
+  int lblFont = (strlen(label) >= 4) ? 1 : 2;   // 44px buttons: shrink 4+ char labels (APPLE/ATARI/IIGS) to fit
   tft.drawString(label, x + w / 2, enabled ? y + h / 2 : y + h / 2 - 6, lblFont);
   if (!enabled) {
     tft.setTextColor(tft.color565(110, 118, 130), face);
@@ -169,6 +169,8 @@ static void splashService()
     splashDrawBtn(PLATFORM_ATARI,  "ATARI",  true);
     splashDrawBtn(PLATFORM_IIGS,   "IIGS",   true);
     splashDrawBtn(PLATFORM_MSX,    "MSX",    true);
+    splashDrawBtn(PLATFORM_SMS,    "SMS",    true);
+    splashDrawBtn(PLATFORM_PCXT,   "PCXT",   true);
     drawn = true;
   }
 
@@ -181,6 +183,8 @@ static void splashService()
     else if (b == PLATFORM_ATARI) splashSelect(PLATFORM_ATARI);
     else if (b == PLATFORM_IIGS)  splashSelect(PLATFORM_IIGS);
     else if (b == PLATFORM_MSX)   splashSelect(PLATFORM_MSX);
+    else if (b == PLATFORM_SMS)   splashSelect(PLATFORM_SMS);
+    else if (b == PLATFORM_PCXT)  splashSelect(PLATFORM_PCXT);
     else if (b < 0)               splashFinish();   // tapped outside -> boot current
     return;
   }
@@ -247,6 +251,16 @@ void renderLoop(void *pvParameters)
     // MSX startup overlay: hard error if no BIOS, or a brief "C-BIOS = no Disk BASIC" note.
     if (currentPlatform == PLATFORM_MSX && msxRenderLoadWarning())
     {
+      Vertical_blankingOn_Off = true;
+      vTaskDelay(pdMS_TO_TICKS(20));
+      continue;
+    }
+
+    // SMS startup overlay: held while no .sms/.bin ROM is loaded. Still poll touch so a tap opens
+    // SETTINGS (to pick a ROM); smsRenderLoadWarning() yields to the options window once it opens.
+    if (currentPlatform == PLATFORM_SMS && smsRenderLoadWarning())
+    {
+      oskPoll();                       // a screen tap opens SETTINGS even while the notice is up
       Vertical_blankingOn_Off = true;
       vTaskDelay(pdMS_TO_TICKS(20));
       continue;
@@ -343,6 +357,22 @@ void renderLoop(void *pvParameters)
       continue;
     }
 
+    // SMS core: the Z80 (core 1) runs the cartridge; the VDP fills a 256x192 Mode 4 framebuffer that we
+    // convert (via the live CRAM palette) + push here, centered with 32px side borders (like MSX).
+    if (currentPlatform == PLATFORM_SMS)
+    {
+#if BOARD_DISPLAY_GFX
+      if (clearScr) { tft.fillScreen(TFT_BLACK); clearScr = false; }   // wipe border after a menu
+#endif
+      displaySetUiMode(false);
+      displaySetVideoRect(24, 192);      // 192 active lines centered in 240
+      displaySetVideoFill(32, 256, true);// 256-wide picture starting at x=32
+      smsRenderFrame();
+      Vertical_blankingOn_Off = true;
+      vTaskDelay(pdMS_TO_TICKS(10));
+      continue;
+    }
+
     // Apple IIGS: the 65C816 (core 1) runs the firmware; draw its 40-col text page here.
     if (currentPlatform == PLATFORM_IIGS)
     {
@@ -353,6 +383,20 @@ void renderLoop(void *pvParameters)
       if (oskActive()) { displaySetUiMode(true); oskRender(); }   // on-screen keyboard overlays the bottom
       Vertical_blankingOn_Off = true;
       vTaskDelay(pdMS_TO_TICKS(33));      // ~30 fps text refresh
+      continue;
+    }
+
+    // PC-XT: the 8086 (core 1) runs the BIOS/DOS; draw the CGA text buffer here (UI-mode 6x8 font,
+    // 80 cols = full 480px width like the IIGS text path). Graphics modes come in M3.
+    if (currentPlatform == PLATFORM_PCXT)
+    {
+#if BOARD_DISPLAY_GFX
+      if (clearScr) { tft.fillScreen(TFT_BLACK); clearScr = false; }
+#endif
+      pcxtRenderFrame();                  // UI-mode text (sets fillScreen + drawString); flush at loop top
+      if (oskActive()) { displaySetUiMode(true); oskRender(); }
+      Vertical_blankingOn_Off = true;
+      vTaskDelay(pdMS_TO_TICKS(33));
       continue;
     }
 

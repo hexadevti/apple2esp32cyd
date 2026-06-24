@@ -83,6 +83,8 @@ static bool ouiIsNES() { return currentPlatform == PLATFORM_NES; }
 static bool ouiIsAtari() { return currentPlatform == PLATFORM_ATARI; }
 static bool ouiIsIIgs() { return currentPlatform == PLATFORM_IIGS; }   // shares the Apple grid, minus MACHINE
 static bool ouiIsMsx() { return currentPlatform == PLATFORM_MSX; }     // ROM/disk browser like NES/Atari
+static bool ouiIsSms() { return currentPlatform == PLATFORM_SMS; }     // ROM browser like NES/Atari/MSX
+static bool ouiIsPcxt() { return currentPlatform == PLATFORM_PCXT; }   // disk-image browser
 
 static std::vector<std::string> &ouiFiles()
 {
@@ -90,6 +92,8 @@ static std::vector<std::string> &ouiFiles()
   if (ouiIsNES()) return nesFiles;
   if (ouiIsAtari()) return atariFiles;
   if (ouiIsMsx()) return msxFiles;
+  if (ouiIsSms()) return smsFiles;
+  if (ouiIsPcxt()) return pcFiles;
   return HdDisk ? hdFiles : diskFiles;
 }
 
@@ -99,6 +103,8 @@ static std::string ouiSel()
   if (ouiIsNES()) return std::string(selectedNesFileName.c_str());
   if (ouiIsAtari()) return std::string(selectedAtariFileName.c_str());
   if (ouiIsMsx()) return std::string(selectedMsxFileName.c_str());
+  if (ouiIsSms()) return std::string(selectedSmsFileName.c_str());
+  if (ouiIsPcxt()) return std::string(selectedPcFileName.c_str());
   return std::string((HdDisk ? selectedHdFileName : selectedDiskFileName).c_str());
 }
 
@@ -221,6 +227,26 @@ static void ouiDrawToggles()
     ouiDrawScreenToggle();
     return;
   }
+  if (ouiIsSms()) {                           // SMS grid: SOUND / JOYSTICK / VIDEO / SPEED + Z80 readout
+    char mhz[12]; snprintf(mhz, sizeof(mhz), "%.1fMHz", smsMeasuredMhz);
+    ouiDrawToggle(0, "SOUND",    sound ? "ON" : "MUTE",          OUI_TXT);
+    ouiDrawToggle(1, "JOYSTICK", joystick ? "ON" : "OFF",        OUI_TXT);
+    ouiDrawToggle(2, "VIDEO",    videoColor ? "COLOR" : "MONO",  OUI_TXT);
+    ouiDrawToggle(3, "SPEED",    smsFast ? "FAST" : "NORMAL",    OUI_TXT);
+    ouiDrawToggle(4, "Z80",      mhz,                            OUI_TXT);   // measured uncapped speed (read-only)
+    for (int i = 5; i < 8; i++) ouiClearToggle(i);
+    ouiDrawScreenToggle();
+    return;
+  }
+  if (ouiIsPcxt()) {                          // PCXT grid: SOUND / VIDEO + 8086 speed readout
+    char mhz[12]; snprintf(mhz, sizeof(mhz), "%.1fMHz", pcMeasuredMhz);
+    ouiDrawToggle(0, "SOUND",    sound ? "ON" : "MUTE",          OUI_TXT);
+    ouiDrawToggle(1, "VIDEO",    videoColor ? "COLOR" : "MONO",  OUI_TXT);
+    ouiDrawToggle(2, "8086",     mhz,                            OUI_TXT);   // measured equiv speed (read-only)
+    for (int i = 3; i < 8; i++) ouiClearToggle(i);
+    ouiDrawScreenToggle();
+    return;
+  }
   if (ouiIsNES() || ouiIsAtari()) {           // NES / Atari grid: SOUND / JOYSTICK / VIDEO
     ouiDrawToggle(0, "SOUND",    sound ? "ON" : "MUTE",          OUI_TXT);
     ouiDrawToggle(1, "JOYSTICK", joystick ? "ON" : "OFF",        OUI_TXT);
@@ -288,6 +314,8 @@ static void ouiDrawFiles()
   sprintf(hdr, "%s  (%d)", ouiIsC64() ? "PRG/D64/CRT" : ouiIsNES() ? "NES ROMS"
                          : ouiIsAtari() ? "A26/BIN ROMS"
                          : ouiIsMsx() ? "MSX ROM/DSK"
+                         : ouiIsSms() ? "SMS ROMS"
+                         : ouiIsPcxt() ? "PC DISK IMG"
                          : (HdDisk ? "HD IMAGES" : "DISK IMAGES"),
           (int)files.size());
   tft.setTextDatum(BL_DATUM);
@@ -307,19 +335,29 @@ static void ouiDrawFiles()
       if (idx >= (int)files.size()) { tft.fillRect(0, ry, 300, OUI_FB_ROWH, OUI_CARD2); continue; }
 
       bool selected = (idx == shownFile);
-      bool mounted  = (files[idx] == sel);
+      bool mntA = ouiIsPcxt() && selectedPcFileName.length()   && (files[idx] == std::string(selectedPcFileName.c_str()));
+      bool mntC = ouiIsPcxt() && selectedPcHdFileName.length() && (files[idx] == std::string(selectedPcHdFileName.c_str()));
+      bool mounted  = (files[idx] == sel) || mntA || mntC;
       uint16_t rowbg = selected ? OUI_SEL : OUI_CARD2;
       tft.fillRect(0, ry, 300, OUI_FB_ROWH, rowbg);
       if (mounted) tft.fillRect(0, ry, 3, OUI_FB_ROWH, OUI_ON);
 
       std::string nm = ouiIsC64() ? ouiDisplayName(files[idx]) : files[idx];
       if (!ouiIsC64() && !nm.empty() && nm[0] == '/') nm = nm.substr(1);
-      if (nm.size() > 46) nm = nm.substr(0, 43) + "...";
+      size_t maxlen = (mntA || mntC) ? 40 : 46;   // leave room for the A:/C: chip on mounted rows
+      if (nm.size() > maxlen) nm = nm.substr(0, maxlen - 3) + "...";
       tft.setTextDatum(ML_DATUM);
       uint16_t txtcol = ouiIsC64() && ouiIsDir(files[idx]) ? tft.color565(120, 200, 255)
                       : (selected ? OUI_TXT : tft.color565(200, 205, 215));
       tft.setTextColor(txtcol, rowbg);
       tft.drawString(nm.c_str(), 9, ry + OUI_FB_ROWH / 2, 1);
+      if (mntA || mntC) {                         // chip showing which drive this image is mounted in
+        const char *tag = (mntA && mntC) ? "AC" : mntA ? "A" : "C";
+        tft.fillRoundRect(278, ry + 2, 20, OUI_FB_ROWH - 4, 3, OUI_ON);
+        tft.setTextDatum(MC_DATUM);
+        tft.setTextColor(OUI_BG, OUI_ON);
+        tft.drawString(tag, 288, ry + OUI_FB_ROWH / 2, 1);
+      }
     }
   }
 
@@ -367,8 +405,17 @@ static void ouiDrawActions()
   uint16_t mc = canMount ? OUI_MOUNT : OUI_CARD2;
   uint16_t mt = canMount ? OUI_TXT : OUI_LBL;
 
-  if (ouiIsC64() || ouiIsNES() || ouiIsAtari() || ouiIsMsx()) {   // C64/NES/Atari/MSX: LOAD & RUN + REBOOT
-    ouiActBtn(6,   120, "LOAD & RUN", mc,         mt,      OUI_FOC_MOUNT);
+  if (ouiIsPcxt()) {                       // PCXT: MOUNT/EJECT A: | MOUNT/EJECT C: | REBOOT
+    std::vector<std::string> &fl = ouiFiles();
+    bool curA = shownFile < fl.size() && selectedPcFileName.length()   && (fl[shownFile] == std::string(selectedPcFileName.c_str()));
+    bool curC = shownFile < fl.size() && selectedPcHdFileName.length() && (fl[shownFile] == std::string(selectedPcHdFileName.c_str()));
+    ouiActBtn(4,   102, curA ? "EJECT A:" : "MOUNT A:", curA ? OUI_RED : mc, curA ? OUI_TXT : mt, OUI_FOC_MOUNT);
+    ouiActBtn(109, 102, curC ? "EJECT C:" : "MOUNT C:", curC ? OUI_RED : mc, curC ? OUI_TXT : mt, OUI_FOC_MNTREBOOT);
+    ouiActBtn(214, 102, "REBOOT",   OUI_REBOOT, OUI_TXT, OUI_FOC_REBOOT);
+    return;
+  }
+  if (ouiIsC64() || ouiIsNES() || ouiIsAtari() || ouiIsMsx() || ouiIsSms()) {   // LOAD & RUN + REBOOT
+    ouiActBtn(6,   120, "LOAD & RUN", mc, mt, OUI_FOC_MOUNT);
     ouiActBtn(132, 182, "REBOOT",     OUI_REBOOT, OUI_TXT, OUI_FOC_REBOOT);
     return;
   }
@@ -386,7 +433,9 @@ static void ouiDrawTitle()
   tft.drawString(ouiIsC64() ? "COMMODORE 64  SETTINGS"
                : ouiIsNES() ? "NINTENDO  NES  SETTINGS"
                : ouiIsAtari() ? "ATARI 2600  SETTINGS"
-               : ouiIsMsx() ? "MSX1  SETTINGS" : "APPLE II  SETTINGS",
+               : ouiIsMsx() ? "MSX1  SETTINGS"
+               : ouiIsSms() ? "MASTER SYSTEM  SETTINGS"
+               : ouiIsPcxt() ? "PC-XT (8086)  SETTINGS" : "APPLE II  SETTINGS",
                  10, OUI_TITLE_H / 2, 2);
   int cw = OUI_TITLE_H, cx = 320 - cw;
   tft.fillRect(cx, 0, cw, OUI_TITLE_H, OUI_RED);
@@ -482,6 +531,20 @@ static void ouiDrawHelp()
     ouiHelpHdr(y, "MSX  -  GAMEPAD");
     ouiHelpRow(y, "D-pad", "Stick");
     ouiHelpRow(y, "A / B", "Trigger A / B");
+  } else if (ouiIsSms()) {
+    ouiHelpHdr(y, "MASTER SYSTEM  -  GAMEPAD");
+    ouiHelpRow(y, "D-pad",  "D-pad");
+    ouiHelpRow(y, "A / B",  "Button 1 / 2");
+    ouiHelpHdr(y, "SMS  -  KEYBOARD");
+    ouiHelpRow(y, "Arrows", "D-pad");
+    ouiHelpRow(y, "Z / X",  "Button 1 / 2");
+  } else if (ouiIsPcxt()) {
+    ouiHelpHdr(y, "PC-XT  -  KEYBOARD");
+    ouiHelpRow(y, "Keys",   "Type into DOS");
+    ouiHelpRow(y, "F12",    "Reboot PC");
+    ouiHelpHdr(y, "PC-XT  -  GAMEPAD");
+    ouiHelpRow(y, "D-pad",  "Arrow keys");
+    ouiHelpRow(y, "A / B",  "Enter / Esc");
   } else {   // Apple II / IIGS
     ouiHelpHdr(y, "APPLE  -  KEYBOARD");
     ouiHelpRow(y, "Keys",   "Type into Apple");
@@ -539,6 +602,26 @@ static void ouiToggle(int idx)
       case 2: videoColor = !videoColor; break;
       case 3: msxFast = !msxFast;       break;   // NORMAL (3.58 MHz) <-> FAST (uncapped)
       default: return;                            // slot 4 (Z80 MHz) is read-only
+    }
+    optionsUiDirty = true;
+    return;
+  }
+  if (ouiIsSms()) {                       // SMS grid: SOUND / JOYSTICK / VIDEO / SPEED (Z80 readout = read-only)
+    switch (idx) {
+      case 0: sound = !sound;           break;
+      case 1: joystick = !joystick;     break;
+      case 2: videoColor = !videoColor; break;
+      case 3: smsFast = !smsFast;       break;   // NORMAL (3.58 MHz) <-> FAST (uncapped)
+      default: return;                            // slot 4 (Z80 MHz) is read-only
+    }
+    optionsUiDirty = true;
+    return;
+  }
+  if (ouiIsPcxt()) {                      // PCXT grid: SOUND / VIDEO (8086 MHz readout = read-only)
+    switch (idx) {
+      case 0: sound = !sound;           break;
+      case 1: videoColor = !videoColor; break;
+      default: return;                            // slot 2 (8086 MHz) is read-only
     }
     optionsUiDirty = true;
     return;
@@ -636,6 +719,18 @@ static void ouiMount()
       showHideOptionsWindow();            // close only on success (failure keeps the old cart)
     return;
   }
+  if (ouiIsSms()) {                        // SMS: load the highlighted .sms/.bin ROM + reset into it
+    if (shownFile >= files.size()) return;
+    if (smsLoadSelected(files[shownFile].c_str()))
+      showHideOptionsWindow();            // close only on success (failure keeps the old ROM)
+    return;
+  }
+  if (ouiIsPcxt()) {                       // PCXT: double-tap a file -> mount it as A: (floppy)
+    if (shownFile >= files.size()) return;
+    if (pcxtMountA(files[shownFile].c_str()))
+      showHideOptionsWindow();            // close only on success (failure keeps the old disk)
+    return;
+  }
   if (ouiIsIIgs()) {                       // IIGS: persist the highlighted image + reboot -> auto-mounted on boot
     if (shownFile >= files.size()) return;
     if (ouiIsDir(files[shownFile])) { ouiBrowse(files[shownFile]); return; }
@@ -647,6 +742,29 @@ static void ouiMount()
   if (HdDisk) setHdFile(); else setDiskFile();
   diskChanged = true;
   showHideOptionsWindow();   // mount selected image and close
+}
+
+// PCXT: toggle the highlighted image in A: (floppy) / C: (hard disk). If it's already mounted in that
+// slot -> eject (stay in settings so the list/buttons update); otherwise mount it -> close settings.
+static void ouiPcxtMountA()
+{
+  std::vector<std::string> &files = ouiFiles();
+  if (files.empty() || shownFile >= files.size()) return;
+  if (selectedPcFileName.length() && files[shownFile] == std::string(selectedPcFileName.c_str())) {
+    pcxtUnmount(0); optionsUiDirty = true;
+  } else if (pcxtMountA(files[shownFile].c_str())) {
+    showHideOptionsWindow();   // A: floppy inserted (DOS sees the media change live)
+  }
+}
+static void ouiPcxtMountC()
+{
+  std::vector<std::string> &files = ouiFiles();
+  if (files.empty() || shownFile >= files.size()) return;
+  if (selectedPcHdFileName.length() && files[shownFile] == std::string(selectedPcHdFileName.c_str())) {
+    pcxtUnmount(2); optionsUiDirty = true;
+  } else if (pcxtMountC(files[shownFile].c_str())) {
+    showHideOptionsWindow();   // C: hard disk attached (reboot to let DOS detect it)
+  }
 }
 
 // Apple "MOUNT + REBOOT": apply the highlighted image as the boot device, save, then restart.
@@ -714,8 +832,8 @@ void optionsUiActivate()              // joystick fire button on the focused con
   else if (f == OUI_FOC_SCREEN)    ouiToggleScreenFill();
 #endif
   else if (f == OUI_FOC_FILES)     ouiMount();
-  else if (f == OUI_FOC_MOUNT)     ouiMount();
-  else if (f == OUI_FOC_MNTREBOOT) ouiMountReboot();
+  else if (f == OUI_FOC_MOUNT)     { if (ouiIsPcxt()) ouiPcxtMountA(); else ouiMount(); }       // PCXT: MOUNT A:
+  else if (f == OUI_FOC_MNTREBOOT) { if (ouiIsPcxt()) ouiPcxtMountC(); else ouiMountReboot(); } // PCXT: MOUNT C:
   else if (f == OUI_FOC_REBOOT)    ouiReboot();
   // FOC_VOL: nothing (adjust with up/down)
 }
@@ -767,7 +885,11 @@ static void ouiHandleTap(int16_t x, int16_t y)
 
   // action buttons
   if (y >= OUI_ACT_TOP && y < OUI_ACT_TOP + OUI_ACT_H) {
-    if (ouiIsC64() || ouiIsNES() || ouiIsAtari() || ouiIsMsx()) {   // LOAD & RUN (6..126) | REBOOT (132..314)
+    if (ouiIsPcxt()) {                      // MOUNT A: (4..106) | MOUNT C: (109..211) | REBOOT (214..316)
+      if (x >= 4 && x < 106)        ouiPcxtMountA();
+      else if (x >= 109 && x < 211) ouiPcxtMountC();
+      else if (x >= 214 && x < 316) ouiReboot();
+    } else if (ouiIsC64() || ouiIsNES() || ouiIsAtari() || ouiIsMsx() || ouiIsSms()) {   // LOAD & RUN (6..126) | REBOOT (132..314)
       if (x >= 6 && x < 126)        ouiMount();
       else if (x >= 132 && x < 314) ouiReboot();
     } else {                                // MOUNT (4..106) | M+REBOOT (109..211) | REBOOT (214..316)
@@ -800,6 +922,8 @@ void optionsUiOpen()
   if (ouiIsNES() && nesFiles.empty()) nesScanFiles();       // populate the .nes browser
   if (ouiIsAtari() && atariFiles.empty()) atariScanFiles(); // populate the .a26/.bin browser
   if (ouiIsMsx() && msxFiles.empty()) msxScanFiles();       // populate the .rom/.dsk browser
+  if (ouiIsSms() && smsFiles.empty()) smsScanFiles();       // populate the .sms/.bin browser
+  if (ouiIsPcxt() && pcFiles.empty()) pcxtScanFiles();      // populate the disk-image browser
   optionsUiSyncSelection();
   optionsUiFocus       = 0;
   ouiHelpOpen          = false;  // always open on the settings page, not the help overlay

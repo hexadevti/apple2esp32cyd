@@ -130,6 +130,40 @@ void applyPlatformInput()
         }
         msxSetInput(m);
     }
+
+    // SMS: 8-way d-pad + 2 buttons onto controller port 1 ($DC). Active-LOW, same bit order as MSX:
+    // bit0=up, bit1=down, bit2=left, bit3=right, bit4=button 1 (TL), bit5=button 2 (TR).
+    if (currentPlatform == PLATFORM_SMS)
+    {
+        uint8_t m = 0xFF;
+        if (joystick && !OptionsWindow)
+        {
+            if (joyX == 0) m &= ~0x01;   // up
+            if (joyX == 2) m &= ~0x02;   // down
+            if (joyY == 0) m &= ~0x04;   // left
+            if (joyY == 2) m &= ~0x08;   // right
+            if (Pb0)       m &= ~0x10;   // button 1
+            if (Pb1)       m &= ~0x20;   // button 2
+        }
+        smsSetInput(m);
+    }
+
+    // PC-XT: gamepad -> arrow keys + Enter/Esc (active-LOW mask, same bit order as SMS:
+    // bit0=up, bit1=down, bit2=left, bit3=right, bit4=A (Enter), bit5=B (Esc)).
+    if (currentPlatform == PLATFORM_PCXT)
+    {
+        uint8_t m = 0xFF;
+        if (!OptionsWindow)
+        {
+            if (joyX == 0) m &= ~0x01;   // up
+            if (joyX == 2) m &= ~0x02;   // down
+            if (joyY == 0) m &= ~0x04;   // left
+            if (joyY == 2) m &= ~0x08;   // right
+            if (Pb0)       m &= ~0x10;   // A -> Enter
+            if (Pb1)       m &= ~0x20;   // B -> Esc
+        }
+        pcxtSetInput(m);
+    }
 }
 
 #if BOARD_INPUT_ANALOG

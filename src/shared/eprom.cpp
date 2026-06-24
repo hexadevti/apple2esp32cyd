@@ -37,7 +37,7 @@ void epromSetup() {
   dacSound = EEPROM.readBool(dacSoundEEPROMaddress);
   volume = EEPROM.readChar(VolumeEEPROMaddress);
   currentPlatform = EEPROM.readChar(PlatformEEPROMaddress);
-  if (currentPlatform > PLATFORM_MSX) currentPlatform = PLATFORM_APPLE2;  // unset/garbage -> default
+  if (currentPlatform > PLATFORM_PCXT) currentPlatform = PLATFORM_APPLE2;  // unset/garbage -> default
 
   // C64 settings (validated so old/uninitialised EEPROM doesn't enable surprises).
   c64Autoload = (EEPROM.readChar(C64AutoloadEEPROMaddress) == 1);
@@ -47,6 +47,7 @@ void epromSetup() {
   screenFill = (EEPROM.readChar(ScreenFillEEPROMaddress) == 1);
   { char s = EEPROM.readChar(NesDisplaySkipEEPROMaddress); nesDisplaySkip = (s >= 1 && s <= 3) ? (uint8_t)s : 3; }  // default 3; fresh EEPROM (0xFF) -> 3
   msxFast = (EEPROM.readChar(MsxSpeedEEPROMaddress) == 1);   // ==1 so fresh EEPROM (0xFF) -> NORMAL
+  smsFast = (EEPROM.readChar(SmsSpeedEEPROMaddress) == 1);   // ==1 so fresh EEPROM (0xFF) -> NORMAL
   readStringFromEEPROM(C64FileNameEEPROMaddress, &selectedC64FileName);
   if (selectedC64FileName.length() == 0 || selectedC64FileName.length() > 120 ||
       selectedC64FileName[0] != '/') {
@@ -71,6 +72,22 @@ void epromSetup() {
   if (selectedMsxFileName.length() == 0 || selectedMsxFileName.length() > 120 ||
       selectedMsxFileName[0] != '/')
     selectedMsxFileName = "";
+
+  // SMS: last-loaded .sms/.bin ROM, auto-loaded on boot (validated; garbage -> none).
+  readStringFromEEPROM(SmsFileNameEEPROMaddress, &selectedSmsFileName);
+  if (selectedSmsFileName.length() == 0 || selectedSmsFileName.length() > 120 ||
+      selectedSmsFileName[0] != '/')
+    selectedSmsFileName = "";
+
+  // PCXT: last-mounted A: floppy + C: hard-disk images, auto-mounted on boot (validated; garbage -> none).
+  readStringFromEEPROM(PcxtFileNameEEPROMaddress, &selectedPcFileName);
+  if (selectedPcFileName.length() == 0 || selectedPcFileName.length() > 120 ||
+      selectedPcFileName[0] != '/')
+    selectedPcFileName = "";
+  readStringFromEEPROM(PcxtHdFileNameEEPROMaddress, &selectedPcHdFileName);
+  if (selectedPcHdFileName.length() == 0 || selectedPcHdFileName.length() > 120 ||
+      selectedPcHdFileName[0] != '/')
+    selectedPcHdFileName = "";
 
 
   if (HdDisk) {
@@ -133,6 +150,7 @@ void saveEEPROM() {
     EEPROM.writeChar(ScreenFillEEPROMaddress, screenFill ? 1 : 0);
     EEPROM.writeChar(NesDisplaySkipEEPROMaddress, (char)nesDisplaySkip);
     EEPROM.writeChar(MsxSpeedEEPROMaddress, msxFast ? 1 : 0);
+    EEPROM.writeChar(SmsSpeedEEPROMaddress, smsFast ? 1 : 0);
   }
 
 // Persist every user-configurable option (all toggles, volume, and the selected
@@ -148,6 +166,9 @@ void saveConfig() {
     writeStringToEEPROM(NesFileNameEEPROMaddress, selectedNesFileName);
     writeStringToEEPROM(AtariFileNameEEPROMaddress, selectedAtariFileName);
     writeStringToEEPROM(MsxFileNameEEPROMaddress, selectedMsxFileName);
+    writeStringToEEPROM(SmsFileNameEEPROMaddress, selectedSmsFileName);
+    writeStringToEEPROM(PcxtFileNameEEPROMaddress, selectedPcFileName);
+    writeStringToEEPROM(PcxtHdFileNameEEPROMaddress, selectedPcHdFileName);
     EEPROM.commit();
   }
   

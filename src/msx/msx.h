@@ -7,7 +7,7 @@
 
 #pragma once
 #include <stdint.h>
-#include "z80.h"
+#include "../z80/z80.h"
 
 namespace msx {
 

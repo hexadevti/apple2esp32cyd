@@ -222,6 +222,34 @@ void msxScanFiles();                      // settings: rescan SD root for *.rom 
 bool msxRenderLoadWarning();              // startup no-BIOS / C-BIOS note overlay (true while showing)
 void loadMsxFilesSync();                  // scan SD root -> msxFiles (ROM/disk browser)
 
+// SMS (Sega Master System) core entry points (src/sms/sms.cpp), called by the platform dispatch
+void smsSetup();                          // alloc RAM/VRAM + reset Z80/VDP/PSG; auto-load saved ROM
+void smsLoop();                           // run the machine frame-by-frame (from loop())
+void smsRenderFrame();                    // VDP render + push the 256x192 picture (from renderLoop)
+void smsPsgSetup();                       // SN76489 audio task (I2S), called from setup() LAST
+void smsSetInput(uint8_t joyMask);        // joystick -> SMS controller port 1 (active-low)
+void smsPauseButton();                    // SMS PAUSE button -> Z80 NMI (mapped to F11)
+void smsHardReset();                      // SMS soft power-cycle: re-run the cartridge (mapped to F12)
+bool smsLoadSelected(const char *path);   // settings: load a .sms/.bin ROM + reset the SMS
+void smsScanFiles();                      // settings: rescan SD root for *.sms / *.bin
+bool smsRenderLoadWarning();              // startup no-ROM warning overlay (true while showing)
+void loadSmsFilesSync();                  // scan SD root -> smsFiles (ROM browser)
+
+// PC-XT (Intel 8086 + CGA) core entry points (src/pcxt/pcxt.cpp), called by the platform dispatch
+void pcxtSetup();                          // alloc 1MB RAM (PSRAM) + 64K video RAM; install BIOS + wire chipset
+void pcxtLoop();                           // run the 8086 in chunks (from loop()); PIT drives IRQ0 real-time
+void pcxtRenderFrame();                    // CGA text/graphics render + push (from renderLoop)
+void pcxtSetInput(uint8_t joyMask);        // gamepad -> arrow/enter scancodes
+void pcxtKeyDown(uint8_t hidUsage, bool shift, bool ctrl, bool alt); // USB key -> XT make scancode
+void pcxtKeyUp(uint8_t hidUsage);          // USB key -> XT break scancode
+void pcxtHardReset();                      // soft reboot the PC (mapped to F12)
+bool pcxtMountA(const char *path);         // settings: mount image into A: (floppy), no reboot
+bool pcxtMountC(const char *path);         // settings: mount image into C: (hard disk), no reboot
+void pcxtUnmount(int slot);                // settings: eject the disk in slot 0 (A:) or 2 (C:)
+void pcxtScanFiles();                      // settings: rescan SD root for *.img/.ima/.dsk/.vhd
+bool pcxtRenderLoadWarning();              // startup overlay (always false: BIOS shows its own POST)
+void loadPcxtFilesSync();                  // scan SD root -> pcFiles (disk browser)
+
 // SID sound (src/c64/c64_sid.cpp)
 void sidSetup();                       // init the 3-voice synth + I2S DAC output task
 void sidWrite(uint8_t reg, uint8_t val);

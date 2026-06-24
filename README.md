@@ -4,7 +4,7 @@
 built-in TFT and microSD. Pick a system on the boot splash and it boots disk/cartridge images
 straight off a microSD card — no PC, no external ROM files.
 
-Five systems share one firmware, dispatched at runtime from the boot splash — four mature cores plus
+Seven systems share one firmware, dispatched at runtime from the boot splash — six playable cores plus
 the **Apple IIGS, which is still in development** (experimental):
 
 | System | CPU | Status | Image formats |
@@ -13,6 +13,8 @@ the **Apple IIGS, which is still in development** (experimental):
 | **Commodore 64** | 6510 | Playable (VIC-II + SID + CIA); `.crt` cartridge support is partial | `.prg` `.d64` `.crt` |
 | **NES** | 2A03 (6502) | Playable; mappers 0–4 | `.nes` (iNES) |
 | **Atari 2600** | 6507 (6502) | Playable | `.a26` `.bin` (2K/4K/8K/16K/32K) |
+| **MSX1** | Z80 | Playable (TMS9918 VDP + AY-3-8910 PSG); BIOS from SD or embedded C-BIOS | `.rom` `.mx1` `.dsk` |
+| **Sega Master System** | Z80 | Playable (Mode 4 VDP + SN76489 PSG); Sega mapper + line interrupts; boots cartridges directly (no BIOS) | `.sms` `.bin` |
 | **Apple IIGS** | 65C816 | **In development** — boots ROM 01, 40-col text + HiRes/DHiRes, standard ProDOS 5.25″/800 KB disks, 1-bit speaker. SHR-heavy/protected titles and GS-native (Ensoniq) sound are not done. | `.dsk` `.po` `.2mg` `.hdv` |
 
 > Derived from [hexadevti/Apple2Esp32](https://github.com/hexadevti/Apple2Esp32). The original was a
@@ -64,8 +66,8 @@ The "CYD" target is the [ESP32-2432S024](https://github.com/jpduhen/CYD_2.4inch_
 
 ### Shared core
 
-- **Boot-splash platform selector** — tap **APPLE / C64 / NES / ATARI / IIGS** to choose a system; the
-  selection persists in EEPROM and auto-boots next time. (**IIGS** is experimental / in development.)
+- **Boot-splash platform selector** — tap **APPLE / C64 / NES / ATARI / IIGS / MSX / SMS** to choose a
+  system; the selection persists in EEPROM and auto-boots next time. (**IIGS** is experimental / in development.)
 - **microSD storage** for every platform, with on-screen file browsers per system.
 - **On-screen touch keyboard** (OSK) on both boards, plus PS/2 on the CYD and a **USB keyboard** on the JC4827W543.
 - **Audio** routed to the board's amplifier — internal DAC on the CYD, I2S Class-D on the S3.
@@ -236,6 +238,8 @@ arduino-cli upload -p COM5 --fqbn esp32:esp32:esp32s3:PSRAM=opi,PartitionScheme=
    - C64: `.prg` / `.d64` / `.crt`
    - NES: `.nes`
    - Atari 2600: `.a26` / `.bin`
+   - MSX1: `.rom` / `.mx1` / `.dsk` (plus an `MSXBIOS.ROM`, or it falls back to the embedded C-BIOS)
+   - Sega Master System: `.sms` / `.bin`
 3. Insert the card, power on, pick a platform on the splash, then choose an image from its on-screen
    file browser.
 

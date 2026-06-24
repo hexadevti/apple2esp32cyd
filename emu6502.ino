@@ -83,6 +83,22 @@ void setup() {
     oskSetup();
     joystickSetup();    // analog stick + buttons -> MSX joystick (PSG port A)
     msxPsgSetup();      // AY-3-8910 -> I2S (M3.5), LAST so its I2S DMA comes after SD
+  } else if (currentPlatform == PLATFORM_SMS) {
+    FSSetup();          // SD first: smsSetup loads the first .sms/.bin off the card
+    smsSetup();         // 8K RAM + 16K VRAM + reset Z80/VDP/PSG; auto-load saved ROM (no BIOS)
+    loadSmsFilesSync(); // scan SD root so the options ROM browser is populated
+    videoSetup();       // TFT + render loop (+ splash)
+    oskSetup();
+    joystickSetup();    // analog stick + buttons -> SMS controller port 1
+    smsPsgSetup();      // SN76489 -> I2S, LAST so its I2S DMA comes after SD
+  } else if (currentPlatform == PLATFORM_PCXT) {
+    FSSetup();          // SD first: pcxtSetup auto-mounts the saved A:/C: disk images
+    pcxtSetup();        // 1MB RAM (PSRAM) + 64K video RAM + install BIOS ROM + wire 8086/PIC/PIT/i8042/CGA
+    loadPcxtFilesSync();// scan SD root so the options disk browser is populated
+    videoSetup();       // TFT + render loop (+ splash)
+    oskSetup();
+    joystickSetup();    // gamepad -> arrow/enter scancodes
+    speakerSetup();     // PC-speaker (PIT ch2) -> I2S amp, LAST so its I2S DMA comes after SD
   } else {             // Apple II
     memoryAlloc();
     FSSetup();
@@ -108,6 +124,8 @@ void loop() {
     case PLATFORM_ATARI:  atariLoop(); break;
     case PLATFORM_IIGS:   iigsLoop(); break;
     case PLATFORM_MSX:    msxLoop(); break;
+    case PLATFORM_SMS:    smsLoop(); break;
+    case PLATFORM_PCXT:   pcxtLoop(); break;
     default:              cpuLoop(); break;
   }
 }

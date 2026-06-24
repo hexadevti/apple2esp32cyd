@@ -648,10 +648,10 @@ void oskPoll()
   int16_t sx = 0, sy = 0;
   bool down = touchRead(&sx, &sy);
 
-  // NES/Atari have no use for the on-screen keyboard (the buttons are game controls), so a
+  // NES/Atari/SMS have no use for the on-screen keyboard (the buttons are game controls), so a
   // screen tap opens the settings menu directly. oskIgnoreCurrentTouch() on close stops the
   // lingering finger from immediately reopening it.
-  if (currentPlatform == PLATFORM_NES || currentPlatform == PLATFORM_ATARI) {
+  if (currentPlatform == PLATFORM_NES || currentPlatform == PLATFORM_ATARI || currentPlatform == PLATFORM_SMS) {
     if (down && !osk_prevDown) showHideOptionsWindow();
     osk_prevDown = down;
     return;
