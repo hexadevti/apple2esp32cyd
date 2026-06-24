@@ -12,7 +12,8 @@ void pcxtSetup();
 void pcxtLoop();
 
 // core-0 render task (src/shared/video.cpp renderLoop)
-void pcxtRenderFrame();
+bool pcxtRenderFrame();
+void pcxtForceRedraw();
 bool pcxtRenderLoadWarning();   // startup overlay while no boot disk is mounted
 
 // input

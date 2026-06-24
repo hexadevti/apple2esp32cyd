@@ -238,7 +238,8 @@ void loadSmsFilesSync();                  // scan SD root -> smsFiles (ROM brows
 // PC-XT (Intel 8086 + CGA) core entry points (src/pcxt/pcxt.cpp), called by the platform dispatch
 void pcxtSetup();                          // alloc 1MB RAM (PSRAM) + 64K video RAM; install BIOS + wire chipset
 void pcxtLoop();                           // run the 8086 in chunks (from loop()); PIT drives IRQ0 real-time
-void pcxtRenderFrame();                    // CGA text/graphics render + push (from renderLoop)
+bool pcxtRenderFrame();                    // CGA render; returns false (skipped) if the picture is unchanged
+void pcxtForceRedraw();                    // force a repaint after a menu/screen clear
 void pcxtSetInput(uint8_t joyMask);        // gamepad -> arrow/enter scancodes
 void pcxtKeyDown(uint8_t hidUsage, bool shift, bool ctrl, bool alt); // USB key -> XT make scancode
 void pcxtKeyUp(uint8_t hidUsage);          // USB key -> XT break scancode

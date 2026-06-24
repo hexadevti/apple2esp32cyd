@@ -111,6 +111,47 @@ static void pcDiskClose(void* ctx) {
   if (ctx) ((File*)ctx)->close();
 }
 
+// Does the disk in `drive` contain a bootable DOS system (IO.SYS/IBMBIO.COM in the root dir)?
+// Reads the FAT boot sector + first root-dir sector through the already-open backend handle.
+static bool pcDriveIsBootable(int drive) {
+  if (!g_pcxtMachine.disk(drive)) return false;
+  bool ok = false;
+  busTake();
+  uint8_t bs[512];
+  if (g_pcxtMachine.diskRead(drive, 0, bs, 512) == 512 && bs[510] == 0x55 && bs[511] == 0xAA) {
+    uint16_t bps  = bs[11] | (bs[12] << 8);
+    uint8_t  nfat = bs[16];
+    uint16_t rsvd = bs[14] | (bs[15] << 8);
+    uint16_t rent = bs[17] | (bs[18] << 8);
+    uint16_t spf  = bs[22] | (bs[23] << 8);
+    if (bps == 512 && nfat >= 1 && rent > 0 && spf > 0) {
+      uint32_t rootSec = rsvd + (uint32_t)nfat * spf;        // FAT12/16 root dir follows the FATs
+      uint8_t rd[512];
+      if (g_pcxtMachine.diskRead(drive, (uint64_t)rootSec * 512, rd, 512) == 512) {
+        for (int e = 0; e < 16; e++) {
+          const uint8_t* d = rd + e * 32;
+          if (d[0] == 0x00) break;          // end of directory
+          if (d[0] == 0xE5) continue;       // deleted entry
+          if (!memcmp(d, "IO      SYS", 11) || !memcmp(d, "IBMBIO  COM", 11) ||
+              !memcmp(d, "MSDOS   SYS", 11) || !memcmp(d, "IBMDOS  COM", 11)) { ok = true; break; }
+        }
+      }
+    }
+  }
+  busGive();
+  return ok;
+}
+
+// Choose the boot drive: a bootable system floppy in A: wins; otherwise a hard disk in C:; otherwise
+// whatever floppy is there. So a NON-system disk in A: with a hard disk present auto-boots C:.
+static void pcUpdateBootDrive() {
+  int bd;
+  if (g_pcxtMachine.disk(0) && pcDriveIsBootable(0)) bd = 0;        // bootable floppy -> A:
+  else if (g_pcxtMachine.disk(2))                    bd = 2;        // else a hard disk -> C:
+  else                                               bd = 0;        // else A: (or nothing)
+  g_pcxtMachine.setBootDrive(bd);
+}
+
 // Mount `path` into a specific drive slot (0 = A: floppy, 2 = C: hard disk), WITHOUT rebooting.
 // Updates that slot's saved name and the boot order (floppy first if present, else hard disk).
 // A: media changes are seen live by DOS; a newly-added C: is recognised only after a reboot.
@@ -121,7 +162,7 @@ static bool pcMountInto(const char* path, int slot) {
   if (!pcLooksLikePcDisk(path)) { sprintf(buf, "PCXT: %s is not a PC disk (no 55AA) - refused", path); printLog(buf); return false; }
   g_pcxtMachine.setDriveImage(slot, path);
   if (slot == 0) selectedPcFileName = path; else selectedPcHdFileName = path;
-  g_pcxtMachine.setBootDrive(g_pcxtMachine.disk(0) ? 0 : 2);   // floppy first, else boot the hard disk
+  pcUpdateBootDrive();   // floppy first, else boot the hard disk
   sprintf(buf, "PCXT: mounted %s into %s", path, slot == 0 ? "A:" : "C:");
   printLog(buf);
   return true;
@@ -174,7 +215,7 @@ void pcxtSetup() {
     pcMountInto(selectedPcFileName.c_str(), 0);     // A: floppy
   if (selectedPcHdFileName.length() > 1 && selectedPcHdFileName != "/")
     pcMountInto(selectedPcHdFileName.c_str(), 2);   // C: hard disk
-  g_pcxtMachine.setBootDrive(g_pcxtMachine.disk(0) ? 0 : 2);
+  pcUpdateBootDrive();
 
   sprintf(buf, "PCXT ready. internal free=%u, spiram free=%u",
           (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
@@ -195,10 +236,12 @@ void pcxtLoop() {
     uint64_t iters = 0;
     while ((uint32_t)(millis() - t0) < 500) { g_pcxtMachine.run(20000); iters += 20000; }
     uint32_t dt = millis() - t0;
-    // rough: assume ~4 cycles/instruction average for an 8086 mix
     double instrPerSec = dt > 0 ? (double)iters / ((double)dt / 1000.0) : 0.0;
-    pcMeasuredMhz = (float)(instrPerSec * 4.0 / 1e6);     // ~equiv MHz (real XT 8088 ~4.77)
-    sprintf(buf, "PCXT: ~%.2f equiv-MHz (%.0f kIPS); real XT = 4.77", pcMeasuredMhz, instrPerSec / 1000.0);
+    // A real 4.77MHz 8088 averages ~12 cycles/instruction -> ~400 kIPS. Report throughput relative to that.
+    double xtRatio = instrPerSec / 400000.0;
+    pcMeasuredMhz = (float)(xtRatio * 4.77);
+    sprintf(buf, "PCXT: %.0f kIPS = ~%.1f MHz-equiv (%.0f%% of a real 4.77MHz XT)",
+            instrPerSec / 1000.0, pcMeasuredMhz, xtRatio * 100.0);
     printLog(buf);
   }
 
@@ -297,25 +340,28 @@ static void pcxtRenderText() {
   int X0 = text80 ? 0 : (320 - cols * LCW) / 2;
   float rowH = (kbdTop - 1.0f) / 25.0f;
   char line[81];
-  // Pass 1: fill every row's background band, with +1px overlap so the logical->native (x272/240)
-  // rounding never leaves a black stripe between rows. (One bg per row = first cell's attribute;
-  // per-char colour comes with the M3 renderer.) Fills go first so they don't clip the text below.
+  // Render per attribute-RUN: fill the run's background over the FULL row band (+1px overlap so the
+  // logical->native x272/240 rounding leaves no black stripe), then draw the glyphs transparently on
+  // top. Per-run bg means each cell keeps its own colour -> coloured text and inverse video (e.g.
+  // 0x70 = black-on-white) just work, AND the gaps between rows are filled with the matching bg
+  // (fixes the stripes that returned when bg was filled per-row-first-cell only).
   for (int r = 0; r < 25; r++) {
-    uint8_t attr = vbuf[(r * cols) * 2 + 1];
     int yTop = (int)(r * rowH + 0.5f);
     int yBot = (int)((r + 1) * rowH + 0.5f);
-    tft.fillRect(X0, yTop, cols * LCW, (yBot - yTop) + 1, kCgaRgb565[(attr >> 4) & 0x07]);
-  }
-  // Pass 2: draw text (transparent fg) over the completed background.
-  for (int r = 0; r < 25; r++) {
-    uint8_t attr = vbuf[(r * cols) * 2 + 1];
-    tft.setTextColor(kCgaRgb565[attr & 0x0F]);
-    for (int c = 0; c < cols; c++) {
-      uint8_t ch = vbuf[(r * cols + c) * 2];
-      line[c] = (ch < 0x20 || ch > 0x7E) ? ' ' : (char)ch;
+    int c = 0;
+    while (c < cols) {
+      uint8_t attr = vbuf[(r * cols + c) * 2 + 1];
+      int start = c, n = 0;
+      while (c < cols && vbuf[(r * cols + c) * 2 + 1] == attr) {
+        uint8_t ch = vbuf[(r * cols + c) * 2];
+        line[n++] = (ch < 0x20 || ch > 0x7E) ? ' ' : (char)ch;
+        c++;
+      }
+      line[n] = 0;
+      tft.fillRect(X0 + start * LCW, yTop, n * LCW, (yBot - yTop) + 1, kCgaRgb565[(attr >> 4) & 0x07]);
+      tft.setTextColor(kCgaRgb565[attr & 0x0F]);   // transparent glyph over the run's bg
+      tft.drawString(line, X0 + start * LCW, yTop, 1);
     }
-    line[cols] = 0;
-    tft.drawString(line, X0, (int)(r * rowH + 0.5f), 1);
   }
 
   // hardware cursor (6845): blinking underline ('_') at the cursor cell.
@@ -332,15 +378,38 @@ static void pcxtRenderText() {
   }
 }
 
-// Dispatch by CGA mode (text vs graphics). Clears the panel on a mode switch so no remnants linger.
-void pcxtRenderFrame() {
-  if (!pcInitDone) return;
-  auto emu = g_pcxtMachine.graphicsAdapter()->emulation();
+// Dispatch by CGA mode (text vs graphics). Returns true if it (re)drew, false if the picture was
+// unchanged and rendering was skipped. The render loop uses that to SKIP the QSPI flush when nothing
+// changed, freeing the shared MSPI bus for the core-1 8086 -> big speedup when the screen is static.
+static uint32_t pcRenderSig = 1;
+static int      pcRenderGfx = -1;
+
+void pcxtForceRedraw() { pcRenderSig = 1; pcRenderGfx = -1; }   // after a menu/clear: force a repaint
+
+bool pcxtRenderFrame() {
+  if (!pcInitDone) return false;
+  fabgl::GraphicsAdapter* ga = g_pcxtMachine.graphicsAdapter();
+  auto emu = ga->emulation();
   bool gfx = (emu == fabgl::GraphicsAdapter::Emulation::PC_Graphics_320x200_4Colors ||
               emu == fabgl::GraphicsAdapter::Emulation::PC_Graphics_640x200_2Colors);
-  static int lastGfx = -1;
-  if ((int)gfx != lastGfx) {                 // text <-> graphics switch: wipe canvas + panel border
-    lastGfx = (int)gfx;
+
+  // Signature of everything that affects the picture (video bytes + mode/colour/cursor/blink).
+  const uint8_t* vbuf = g_pcxtMachine.videoMemory() + 0x8000 + g_pcxtMachine.cgaMemOffset();
+  const uint32_t* w32 = (const uint32_t*)vbuf;
+  int nwords = (gfx ? 16000 : 4000) / 4;
+  uint32_t sig = 2166136261u;
+  for (int i = 0; i < nwords; i++) sig = (sig ^ w32[i]) * 16777619u;
+  sig ^= (uint32_t)emu * 2654435761u;
+  sig ^= (uint32_t)g_pcxtMachine.cgaColorReg() << 3;
+  sig ^= (uint32_t)(ga->cursorRow() * 256 + ga->cursorCol()) << 11;
+  if (!gfx && ga->cursorVisible() && ((millis() / 400) & 1)) sig ^= 0xCAFEF00Du;  // blink phase (text)
+
+  bool modeChanged = ((int)gfx != pcRenderGfx);
+  if (sig == pcRenderSig && !modeChanged) return false;   // unchanged -> skip render + flush
+  pcRenderSig = sig;
+
+  if (modeChanged) {                         // text <-> graphics switch: wipe canvas + panel border
+    pcRenderGfx = (int)gfx;
     tft.setUiMode(true);
     tft.fillScreen(TFT_BLACK);
 #if BOARD_DISPLAY_GFX
@@ -349,6 +418,7 @@ void pcxtRenderFrame() {
   }
   if (gfx) pcxtRenderGraphics(emu);
   else     pcxtRenderText();
+  return true;
 }
 
 bool pcxtRenderLoadWarning() {
@@ -391,10 +461,10 @@ static uint8_t hidToScan(uint8_t usage, bool* e0) {
     case 0x3D: return 0x3E;  case 0x3E: return 0x3F;  case 0x3F: return 0x40;  // F4..F6
     case 0x40: return 0x41;  case 0x41: return 0x42;  case 0x42: return 0x43;  // F7..F9
     case 0x43: return 0x44;  case 0x44: return 0x57;  case 0x45: return 0x58;  // F10..F12
-    case 0x4F: *e0 = true; return 0x4D;  // Right
-    case 0x50: *e0 = true; return 0x4B;  // Left
-    case 0x51: *e0 = true; return 0x50;  // Down
-    case 0x52: *e0 = true; return 0x48;  // Up
+    case 0x4F: return 0x4D;  // Right (keypad 6; no E0 = classic XT arrow, NumLock off)
+    case 0x50: return 0x4B;  // Left  (keypad 4)
+    case 0x51: return 0x50;  // Down  (keypad 2)
+    case 0x52: return 0x48;  // Up    (keypad 8)
     case 0xE0: return 0x1D;  // LCtrl
     case 0xE1: return 0x2A;  // LShift
     case 0xE2: return 0x38;  // LAlt
@@ -447,6 +517,6 @@ void pcxtUnmount(int slot) {
   if (!pcInitDone) return;
   g_pcxtMachine.setDriveImage(slot, nullptr);      // null filename -> close + leave the slot empty
   if (slot == 0) selectedPcFileName = ""; else selectedPcHdFileName = "";
-  g_pcxtMachine.setBootDrive(g_pcxtMachine.disk(0) ? 0 : 2);
+  pcUpdateBootDrive();
   printLog(slot == 0 ? "PCXT: ejected A:" : "PCXT: ejected C:");
 }

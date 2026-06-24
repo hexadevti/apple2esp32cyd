@@ -386,17 +386,21 @@ void renderLoop(void *pvParameters)
       continue;
     }
 
-    // PC-XT: the 8086 (core 1) runs the BIOS/DOS; draw the CGA text buffer here (UI-mode 6x8 font,
-    // 80 cols = full 480px width like the IIGS text path). Graphics modes come in M3.
+    // PC-XT: the 8086 (core 1) runs the BIOS/DOS; render the CGA buffer here. pcxtRenderFrame() returns
+    // false when the picture is UNCHANGED -> we then skip the QSPI flush (setBypassCanvas), so core 0
+    // stops draining the shared MSPI bus and the 8086 runs much faster while the screen is static.
     if (currentPlatform == PLATFORM_PCXT)
     {
 #if BOARD_DISPLAY_GFX
-      if (clearScr) { tft.fillScreen(TFT_BLACK); clearScr = false; }
+      if (clearScr) { tft.fillScreen(TFT_BLACK); tft.fillPanelBlack(); clearScr = false; pcxtForceRedraw(); }
 #endif
-      pcxtRenderFrame();                  // UI-mode text (sets fillScreen + drawString); flush at loop top
-      if (oskActive()) { displaySetUiMode(true); oskRender(); }
+      bool drew = pcxtRenderFrame();
+      if (oskActive()) { displaySetUiMode(true); oskRender(); drew = true; }
+#if BOARD_DISPLAY_GFX
+      if (!drew) tft.setBypassCanvas(true);   // nothing changed -> no flush this round (free the bus)
+#endif
       Vertical_blankingOn_Off = true;
-      vTaskDelay(pdMS_TO_TICKS(33));
+      vTaskDelay(pdMS_TO_TICKS(drew ? 16 : 40));
       continue;
     }
 
