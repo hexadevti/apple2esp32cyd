@@ -154,27 +154,35 @@ static void renderSprites(uint8_t* fb) {
 
   static uint8_t lineMark[VDP_W];
   for (int py = 0; py < VDP_H; py++) {
-    memset(lineMark, 0, sizeof(lineMark));
-    int drawn = 0;
+    // Pass 1: pick the (up to 4) lowest-numbered sprites that cover this scanline; the 5th sets the
+    // 5th-sprite status. The 4-per-line limit keeps the LOWEST indices (highest priority).
+    int sel[4], nsel = 0;
     for (int k = 0; k < nsp; k++) {
       int i = order[k];
       int yb = vram[(attr + i * 4) & 0x3FFF];
-      int sy = yb + 1; if (sy > 225) sy -= 256;          // y > 225 wraps above the top
+      int sy = yb + 1; if (sy > 225) sy -= 256;          // y > 225 wraps partially above the top
       if (py < sy || py >= sy + dsize) continue;          // sprite doesn't cover this scanline
-      if (drawn >= 4) { vstatus = (uint8_t)((vstatus & ~0x1F) | (i & 0x1F) | 0x40); break; }  // 5th-sprite
-      drawn++;
+      if (nsel >= 4) { vstatus = (uint8_t)((vstatus & ~0x1F) | (i & 0x1F) | 0x40); break; }  // 5th-sprite
+      sel[nsel++] = i;
+    }
+    // Pass 2: draw HIGH index first so the lowest-numbered sprite ends up on top (MSX priority).
+    memset(lineMark, 0, sizeof(lineMark));
+    for (int s = nsel - 1; s >= 0; s--) {
+      int i = sel[s];
+      int yb = vram[(attr + i * 4) & 0x3FFF];
+      int sy = yb + 1; if (sy > 225) sy -= 256;
       int x = vram[(attr + i * 4 + 1) & 0x3FFF];
       uint8_t pat = vram[(attr + i * 4 + 2) & 0x3FFF];
       uint8_t cb = vram[(attr + i * 4 + 3) & 0x3FFF];
       int color = cb & 0x0F;
+      if (color == 0) continue;                            // sprite color 0 = fully transparent
       if (cb & 0x80) x -= 32;                              // early clock
       if (size == 16) pat &= 0xFC;
       int r = (py - sy) / mag;                             // pattern row 0..size-1
       for (int c = 0; c < size; c++) {
         int patNum = pat + ((size == 16) ? (((c >= 8) ? 2 : 0) + ((r >= 8) ? 1 : 0)) : 0);
         uint8_t pb = vram[(patb + patNum * 8 + (r & 7)) & 0x3FFF];
-        if (!(pb & (0x80 >> (c & 7)))) continue;
-        if (color == 0) continue;                          // sprite color 0 = transparent
+        if (!(pb & (0x80 >> (c & 7)))) continue;           // transparent (pattern bit 0)
         for (int mx = 0; mx < mag; mx++) {
           int px = x + c * mag + mx;
           if (px < 0 || px >= VDP_W) continue;

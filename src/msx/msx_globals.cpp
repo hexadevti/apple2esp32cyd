@@ -11,4 +11,5 @@ namespace msx {
   uint8_t* vram        = nullptr;   // 16 KB VDP RAM
   uint8_t* framebuffer = nullptr;   // 256x192 indexed (sharedBigBuf on device)
   bool     biosIsCbios = false;
+  volatile bool frameReady = false;   // set by core 1 when a frame is rendered, cleared by core 0 after display
 }

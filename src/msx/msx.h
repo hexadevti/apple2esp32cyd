@@ -24,6 +24,8 @@ extern int      biosLen;
 extern uint8_t* vram;           // 16 KB VDP RAM
 extern uint8_t* framebuffer;    // 256*192 indexed; points at sharedBigBuf on the device
 extern bool     biosIsCbios;    // true when we fell back to the embedded C-BIOS (no Disk BASIC)
+extern volatile bool frameReady;// producer/consumer handshake: core 1 fills the framebuffer, core 0
+                                // displays it; neither touches it while the other does (no tearing)
 
 // ---- machine core (msx_machine.cpp) ----
 void machineWire();             // point cpu.rd/wr/in/out at the routers below; call after pointers set

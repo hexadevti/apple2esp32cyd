@@ -9,11 +9,38 @@
 #include "msx.h"
 #include "msx_cbios.h"
 #include "msx_cart.h"
+#include "msx_disk.h"
+#include "msx_diskrom.h"
 #include <dirent.h>
 
 // ---- per-frame RGB565 conversion band (malloc'd on the MSX path only, like nesScratch) ----------
 static uint16_t* msxScratch = nullptr;
 static uint8_t*  g_cartBuf  = nullptr;   // device cartridge image (PSRAM); freed on reload
+static uint8_t*  g_diskBuf  = nullptr;   // mounted .dsk image (PSRAM); freed on remount
+static File      g_diskFile;             // persistent r+ handle for SD write-back of dirty sectors
+static bool      g_diskFileOpen = false;
+
+// Drain up to maxSectors dirty sectors of the mounted .dsk back to the SD file (called from msxLoop,
+// core 1; the bus lock serializes the SD access against the touch reads on core 0).
+static void msxDiskFlush(int maxSectors) {
+  if (!g_diskFileOpen || !msx::diskHasDirty()) return;
+  busTake();
+  for (int i = 0; i < maxSectors; i++) {
+    const uint8_t* data; uint32_t off;
+    int sec = msx::diskTakeDirtySector(&data, &off);
+    if (sec < 0) break;
+    g_diskFile.seek(off);
+    g_diskFile.write(data, 512);
+  }
+  g_diskFile.flush();
+  busGive();
+}
+static void msxDiskClose() {              // flush everything left + close the write-back handle
+  if (!g_diskFileOpen) return;
+  while (msx::diskHasDirty()) msxDiskFlush(64);
+  g_diskFile.close();
+  g_diskFileOpen = false;
+}
 static volatile bool msxResetReq = false;
 static const int M_W = 256, M_H = 192, M_OX = (320 - 256) / 2;
 
@@ -104,8 +131,8 @@ void msxSetup() {
   msx::machineWire();
   msx::machineReset();
 
-  // auto-load the saved cartridge (.rom), if any (skips disk images - those are M5)
-  if (selectedMsxFileName.length() > 1 && selectedMsxFileName != "/" && msxEndsCI(std::string(selectedMsxFileName.c_str()), ".rom"))
+  // auto-load the saved cartridge (.rom/.mx1) or mount the saved disk (.dsk) on boot
+  if (selectedMsxFileName.length() > 1 && selectedMsxFileName != "/")
     msxLoadSelected(selectedMsxFileName.c_str());
 
   sprintf(buf, "MSX ready. internal free=%u, heap=%u",
@@ -135,6 +162,7 @@ void msxLoop() {
     if (msx::biosLen == 0) { vTaskDelay(pdMS_TO_TICKS(100)); continue; }                 // no BIOS -> nothing to run
 
     msx::runFrame();
+    msxDiskFlush(4);                                   // drain a few dirty disk sectors to SD per frame
 
     if (msxFast) {
       vTaskDelay(1);                                   // uncapped: just yield to core 0 / WDT
@@ -159,8 +187,11 @@ void msxLoop() {
 // keyboard is open the picture is vertically SCALED into the rows above it (oskRasterTop/Height) so the
 // emulated screen stays fully visible above the keyboard instead of being covered (matches Apple/C64).
 void msxRenderFrame() {
-  msx::vdpRender();
-  if (!msxScratch || !msx::framebuffer) return;
+  // The VDP framebuffer is rendered on the CPU core (msx::runFrame). Display it only when a fresh
+  // frame is ready, and clear the flag when done so core 1 can render the next one -- this
+  // handshake guarantees the two cores never touch the framebuffer simultaneously (no tearing).
+  if (!msx::frameReady) return;                 // no new frame; the panel keeps the last one
+  if (!msxScratch || !msx::framebuffer) { msx::frameReady = false; return; }
   const uint16_t* pal = msx::MSX_PALETTE;
   const int outTop = oskRasterTop();      // 0 when the keyboard is open, else 24 (centered)
   const int outH   = oskRasterHeight();   // keyboard-top (112) when open, else 192 (1:1)
@@ -186,6 +217,7 @@ void msxRenderFrame() {
     oy += n;
   }
   tft.setSwapBytes(false);
+  msx::frameReady = false;     // done reading the framebuffer; core 1 may render the next frame
 }
 
 // msxPsgSetup() lives in msx_audio.cpp (it owns the I2S driver), like atariAudioSetup/sidSetup.
@@ -195,12 +227,8 @@ void msxKeyMatrix(uint8_t row, uint8_t col, bool down) { msx::kbSetKey(row, col,
 void msxSetInput(uint8_t joyMask) { msx::setJoystick(joyMask); }
 
 // ---- settings hooks ----
-bool msxLoadSelected(const char* path) {
-  std::string p = path ? path : "";
-  if (!msxEndsCI(p, ".rom") && !msxEndsCI(p, ".mx1")) {
-    printLog("MSX: only .rom carts load for now (.dsk = M5 disk drive)");
-    return false;
-  }
+// Load a .rom/.mx1 cartridge into slot 1 (and remove any disk).
+static bool msxLoadCart(const char* path) {
   File f = FSTYPE.open(path, FILE_READ);
   if (!f) { sprintf(buf, "MSX: cannot open %s", path); printLog(buf); return false; }
   int len = f.size();
@@ -212,11 +240,48 @@ bool msxLoadSelected(const char* path) {
   if (got != len) { free(cb); printLog("MSX: cart read short"); return false; }
   g_cartBuf = cb;
   msxCartLoadImage(1, cb, len);
-  selectedMsxFileName = path;
-  msxResetReq = true;
+  msxDiskClose();                                  // flush + close any disk write-back handle
+  msx::diskSetRom(nullptr, 0); msx::diskEject();   // disk off when a cart is inserted
+  if (g_diskBuf) { free(g_diskBuf); g_diskBuf = nullptr; }
   sprintf(buf, "MSX: cart %s (%dK) loaded", path, len / 1024);
   printLog(buf);
   return true;
+}
+
+// Mount a .dsk image (read into PSRAM) and install the C-DISK ROM in slot 2 (and remove any cart).
+static bool msxMountDiskImage(const char* path) {
+  File f = FSTYPE.open(path, FILE_READ);
+  if (!f) { sprintf(buf, "MSX: cannot open %s", path); printLog(buf); return false; }
+  int len = f.size();
+  if (len <= 0 || len > 2 * 1024 * 1024) { f.close(); printLog("MSX: disk size out of range"); return false; }
+  if (g_diskBuf) { free(g_diskBuf); g_diskBuf = nullptr; }
+  uint8_t* db = (uint8_t*)ps_malloc(len);
+  if (!db) { f.close(); printLog("MSX: disk malloc failed"); return false; }
+  int rd = 0;
+  while (rd < len) { int n = f.read(db + rd, (len - rd > 8192) ? 8192 : (len - rd)); if (n <= 0) break; rd += n; }
+  f.close();
+  if (rd != len) { free(db); printLog("MSX: disk read short"); return false; }
+  g_diskBuf = db;
+  msxCartEject(1);                                  // cart off when a disk is mounted
+  if (g_cartBuf) { free(g_cartBuf); g_cartBuf = nullptr; }
+  msx::diskSetRom(msxDiskRom, (int)msxDiskRomLen);  // install the HB3600 disk ROM in slot 2
+  msx::diskSetImage(db, len);
+  msxDiskClose();                                   // close any previous write-back handle
+  g_diskFile = FSTYPE.open(path, "r+");             // random-access read/write (no truncate) for write-back
+  g_diskFileOpen = (bool)g_diskFile;
+  sprintf(buf, "MSX: disk %s (%dK) mounted%s", path, len / 1024, g_diskFileOpen ? "" : " (write-back off)");
+  printLog(buf);
+  return true;
+}
+
+bool msxLoadSelected(const char* path) {
+  std::string p = path ? path : "";
+  bool ok;
+  if (msxEndsCI(p, ".dsk")) ok = msxMountDiskImage(path);
+  else if (msxEndsCI(p, ".rom") || msxEndsCI(p, ".mx1")) ok = msxLoadCart(path);
+  else { printLog("MSX: unsupported file (use .rom/.mx1 cart or .dsk disk)"); return false; }
+  if (ok) { selectedMsxFileName = path; msxResetReq = true; }
+  return ok;
 }
 
 void msxScanFiles() { loadMsxFilesSync(); }

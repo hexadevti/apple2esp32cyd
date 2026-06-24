@@ -3,6 +3,7 @@
 // host/msx_host.cpp. See msx.h.
 
 #include "msx.h"
+#include "msx_disk.h"
 #include <string.h>
 
 namespace msx {
@@ -13,8 +14,8 @@ uint8_t memRead8(uint16_t a) {
   int slot = ppiPageSlot(a >> 14);
   switch (slot) {
     case 0:  return (a < (uint16_t)biosLen) ? bios[a] : 0xFF;   // BIOS ROM (0xFF above its size)
-    case 1:  return cartRead(1, a);
-    case 2:  return cartRead(2, a);
+    case 1:  return cartRead(1, a);                             // cartridge
+    case 2:  return diskRead(a);                                // disk-interface ROM + .dsk window
     default: return ram[a];                                     // slot 3 = RAM
   }
 }
@@ -23,7 +24,7 @@ void memWrite8(uint16_t a, uint8_t v) {
   switch (slot) {
     case 0:  break;                       // BIOS ROM: writes ignored
     case 1:  cartWrite(1, a, v); break;    // mapper bank-select (and any cart RAM)
-    case 2:  cartWrite(2, a, v); break;
+    case 2:  diskWrite(a, v); break;       // disk window bank-select
     default: ram[a] = v;                   // slot 3 = RAM
   }
 }
@@ -72,6 +73,13 @@ void runFrame() {
   const uint64_t TPF = 59736;
   uint64_t target = cpu.cycles + TPF;
   while (cpu.cycles < target) cpu.step();
+  // Render on THIS core (the CPU core) so the VDP reads the sprite/VRAM tables race-free, at a
+  // consistent point - the end of the active frame, before the VBlank ISR updates them for the
+  // next one. Only render into the shared framebuffer once core 0 has finished DISPLAYING the
+  // previous frame (frameReady == false), so the two cores never touch the buffer at the same time
+  // -> no torn frames (the green-field squares over the white lines). The CPU steps + VBlank IRQ
+  // still run every frame regardless, so emulation timing is unaffected.
+  if (!frameReady) { vdpRender(); frameReady = true; }
   vdpEndFrame();
   if (vdpIrqActive()) cpu.irq(0xFF);    // MSX uses IM 1; the data-bus byte is ignored
 }
