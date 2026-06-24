@@ -71,6 +71,8 @@ public:
   static void setCX(uint16_t value);
   static void setDX(uint16_t value);
   static void setDI(uint16_t value);
+  static void setSI(uint16_t value);
+  static void setBP(uint16_t value);
   static void setCS(uint16_t value);
   static void setDS(uint16_t value);
   static void setSS(uint16_t value);
@@ -104,6 +106,10 @@ public:
 
   static void setFlagZF(bool value);
   static void setFlagCF(bool value);
+
+  // full FLAGS word pack/unpack (used to save/restore CPU context around an injected mouse callback)
+  static uint16_t flagsWord();
+  static void     setFlagsWord(uint16_t value);
 
   static uint16_t IP();
 

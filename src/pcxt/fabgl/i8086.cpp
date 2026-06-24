@@ -478,6 +478,30 @@ void i8086::setSP(uint16_t value)
 }
 
 
+void i8086::setSI(uint16_t value)
+{
+  regs16[REG_SI] = value;
+}
+
+
+void i8086::setBP(uint16_t value)
+{
+  regs16[REG_BP] = value;
+}
+
+
+uint16_t i8086::flagsWord()
+{
+  return make_flags();
+}
+
+
+void i8086::setFlagsWord(uint16_t value)
+{
+  set_flags(value);
+}
+
+
 uint16_t i8086::AX()
 {
   return regs16[REG_AX];

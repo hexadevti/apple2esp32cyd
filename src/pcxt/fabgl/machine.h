@@ -70,6 +70,16 @@ public:
   typedef void (*SpeakerFn)(int freq, bool on);
   static void setSpeakerCallback(SpeakerFn f) { s_speakerCb = f; }
 
+  // INT 33h (mouse) is serviced directly by the device glue from the USB mouse (no MOUSE.COM / PS2
+  // hardware). The handler reads/writes the 8086 registers and returns true if it handled the call.
+  typedef bool (*Int33Fn)();
+  static void setInt33Handler(Int33Fn f) { s_int33 = f; }
+
+  // Called once per instruction (between instructions, before step()). The device glue uses it to
+  // inject the INT 33h mouse event-handler far-call into the running program (QBASIC uses callbacks).
+  typedef void (*StepHook)();
+  static void setStepHook(StepHook f) { s_stepHook = f; }
+
   // Disk backend (set by the device glue: SD/File on device, stdio on the host harness).
   // The stdio FILE* path was unreliable on the ESP32 SD VFS (fseek/ftell returned 0),
   // so disk images go through these hooks instead. ctx is an opaque per-drive handle.
@@ -155,6 +165,8 @@ private:
   static DiskIoFn    s_diskIo;
   static DiskCloseFn s_diskClose;
   static SpeakerFn   s_speakerCb;
+  static Int33Fn     s_int33;
+  static StepHook    s_stepHook;
 
   PIC8259   m_PIC8259A;   // master
   PIC8259   m_PIC8259B;   // slave

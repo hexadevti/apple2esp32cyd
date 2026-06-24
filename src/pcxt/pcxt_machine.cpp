@@ -31,6 +31,8 @@ Machine::DiskOpenFn Machine::s_diskOpen   = nullptr;
 Machine::DiskIoFn   Machine::s_diskIo     = nullptr;
 Machine::DiskCloseFn Machine::s_diskClose = nullptr;
 Machine::SpeakerFn  Machine::s_speakerCb  = nullptr;
+Machine::Int33Fn    Machine::s_int33      = nullptr;
+Machine::StepHook   Machine::s_stepHook   = nullptr;
 
 // the single instance
 Machine g_pcxtMachine;
@@ -107,6 +109,8 @@ void Machine::run(int iterations)
   for (int i = 0; i < iterations; ++i) {
     if (m_reset)
       reset();
+    if (s_stepHook)        // mouse INT 33h event-handler injection (cheap early-out when idle)
+      s_stepHook();
     i8086::step();
     tick();
   }
@@ -259,6 +263,9 @@ uint16_t Machine::readVideoMemory16(void * context, int address)
 bool Machine::interrupt(void * context, int num)
 {
   auto m = (Machine*)context;
+
+  // Mouse INT 33h: serviced directly from the USB mouse, from any code segment (not just the BIOS).
+  if (num == 0x33 && s_int33 && s_int33()) return true;
 
   if (i8086::CS() == BIOS_SEG) {
     switch (num) {

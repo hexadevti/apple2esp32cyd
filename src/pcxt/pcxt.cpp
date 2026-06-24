@@ -168,6 +168,150 @@ static bool pcMountInto(const char* path, int slot) {
   return true;
 }
 
+// ---- PC mouse: the emulator serves INT 33h directly from the USB mouse (no MOUSE.COM / PS2 HW) ----
+// INT 33h is THE standard DOS mouse API; apps use it either by polling (fn 3) or by registering an
+// event handler (fn 0Ch) that the driver must FAR-CALL on each event. QBASIC uses fn 0Ch, so besides
+// answering polls we inject a far-call into the app's handler from the per-instruction step hook.
+static volatile int  pcMouseX = 320, pcMouseY = 100;     // virtual coords (0..639 x, 0..199 y)
+static volatile int  pcMouseBtns = 0;                    // bit0=left, bit1=right, bit2=middle
+static volatile int  pcMouseAccX = 0, pcMouseAccY = 0;   // raw motion since the last fn 0x0B
+static volatile bool pcMouseShown = false;
+static int pcMouseMinX = 0, pcMouseMaxX = 639, pcMouseMinY = 0, pcMouseMaxY = 199;
+// latched button press/release counts + positions (INT 33h fn 5/6)
+static volatile int pcBtnPrev = 0;
+static volatile int pcBtnPressCnt[3] = {0,0,0}, pcBtnRelCnt[3] = {0,0,0};
+static volatile int pcBtnPressX[3] = {0,0,0}, pcBtnPressY[3] = {0,0,0};
+static volatile int pcBtnRelX[3]   = {0,0,0}, pcBtnRelY[3]   = {0,0,0};
+// INT 33h fn 0Ch event handler (the app's far procedure, called by us on matching events)
+static volatile uint16_t pcCbSeg = 0, pcCbOff = 0, pcCbMask = 0;  // handler seg:off + event mask
+static volatile uint16_t pcEvCond = 0;                            // pending event condition bits
+static volatile bool     pcEvPending = false;
+static bool     pcInCb    = false;                               // currently running an injected callback
+static uint16_t pcCbRetCS = 0, pcCbRetIP = 0;                    // return CS:IP, to detect the RETF
+static uint16_t pcSavAX, pcSavBX, pcSavCX, pcSavDX, pcSavSI, pcSavDI, pcSavBP, pcSavDS, pcSavES, pcSavFL; // full ctx saved across the call
+
+static void pcMouseClearCb() { pcCbSeg = pcCbOff = pcCbMask = 0; pcEvPending = false; pcEvCond = 0; pcInCb = false; }
+
+// Called from the USB host with relative movement + button bitmap.
+void pcxtMouseInput(int dx, int dy, uint8_t buttons) {
+  if (currentPlatform != PLATFORM_PCXT) return;
+  int nx = pcMouseX + dx * 2, ny = pcMouseY + dy * 2;    // ~2 px per mouse unit
+  if (nx < pcMouseMinX) nx = pcMouseMinX; else if (nx > pcMouseMaxX) nx = pcMouseMaxX;
+  if (ny < pcMouseMinY) ny = pcMouseMinY; else if (ny > pcMouseMaxY) ny = pcMouseMaxY;
+  pcMouseX = nx; pcMouseY = ny;
+  pcMouseAccX += dx * 2; pcMouseAccY += dy * 2;
+  int nb = buttons & 0x07, prev = pcBtnPrev;
+  uint16_t cond = (dx || dy) ? 0x01 : 0;                 // INT 33h event condition mask
+  for (int b = 0; b < 3; b++) {                          // latch press/release transitions
+    int m = 1 << b;
+    if ((nb & m) && !(prev & m)) { pcBtnPressCnt[b]++; pcBtnPressX[b] = nx; pcBtnPressY[b] = ny; cond |= 0x02 << (b * 2); }
+    if (!(nb & m) && (prev & m)) { pcBtnRelCnt[b]++;   pcBtnRelX[b]   = nx; pcBtnRelY[b]   = ny; cond |= 0x04 << (b * 2); }
+  }
+  pcBtnPrev = nb;
+  pcMouseBtns = nb;
+  uint16_t masked = cond & pcCbMask;                     // queue an event for the app's fn 0Ch handler
+  if (masked && (pcCbSeg || pcCbOff)) { pcEvCond |= masked; pcEvPending = true; }
+}
+
+// Per-instruction hook (Machine::run): inject a far-call to the app's INT 33h event handler when an
+// event is pending. Mirrors how a real mouse driver calls the handler from its hardware IRQ.
+static uint32_t pcCbAge = 0;   // instructions since the current callback was injected (stuck-watchdog)
+static void pcMouseStepHook() {
+  if (!pcCbSeg && !pcCbOff) return;                      // no handler installed -> nothing to do
+  if (pcInCb) {                                          // waiting for the injected handler to RETF
+    if (fabgl::i8086::CS() == pcCbRetCS && fabgl::i8086::IP() == pcCbRetIP) {
+      // handler returned: restore the FULL interrupted-code context. A real mouse driver protects the
+      // caller across the callback (pusha/popa for GP regs + saved DS/ES + IRET-restored FLAGS), so the
+      // app's handler may freely trash any register. Mirror that or the interrupted code corrupts.
+      fabgl::i8086::setAX(pcSavAX); fabgl::i8086::setBX(pcSavBX); fabgl::i8086::setCX(pcSavCX);
+      fabgl::i8086::setDX(pcSavDX); fabgl::i8086::setSI(pcSavSI); fabgl::i8086::setDI(pcSavDI);
+      fabgl::i8086::setBP(pcSavBP); fabgl::i8086::setDS(pcSavDS); fabgl::i8086::setES(pcSavES);
+      fabgl::i8086::setFlagsWord(pcSavFL);
+      pcInCb = false;
+    }
+    else if (++pcCbAge > 300000) pcInCb = false;         // watchdog: never lock out if a return is missed
+    return;
+  }
+  if (!pcEvPending) return;
+  if (!fabgl::i8086::flagIF()) return;                   // inject only with interrupts enabled (IRQ-like)
+  if (fabgl::i8086::CS() == 0xF000) return;              // not while inside the magic-interrupt BIOS
+
+  uint16_t cond = pcEvCond; pcEvCond = 0; pcEvPending = false;
+  pcCbAge = 0;
+  uint8_t * mem  = g_pcxtMachine.memory();
+  uint32_t  ssb  = (uint32_t)fabgl::i8086::SS() << 4;
+  uint16_t  sp   = fabgl::i8086::SP();
+  uint16_t  curCS = fabgl::i8086::CS(), curIP = fabgl::i8086::IP();
+  // push CS then IP (far-call frame; the handler ends with RETF, returning to curCS:curIP)
+  sp -= 2; { uint32_t a = (ssb + sp) & 0xFFFFF; mem[a] = curCS & 0xFF; mem[(a + 1) & 0xFFFFF] = curCS >> 8; }
+  sp -= 2; { uint32_t a = (ssb + sp) & 0xFFFFF; mem[a] = curIP & 0xFF; mem[(a + 1) & 0xFFFFF] = curIP >> 8; }
+  fabgl::i8086::setSP(sp);
+  pcCbRetCS = curCS; pcCbRetIP = curIP;
+  // save the FULL interrupted-code context so we can restore it when the handler returns
+  pcSavAX = fabgl::i8086::AX(); pcSavBX = fabgl::i8086::BX(); pcSavCX = fabgl::i8086::CX();
+  pcSavDX = fabgl::i8086::DX(); pcSavSI = fabgl::i8086::SI(); pcSavDI = fabgl::i8086::DI();
+  pcSavBP = fabgl::i8086::BP(); pcSavDS = fabgl::i8086::DS(); pcSavES = fabgl::i8086::ES();
+  pcSavFL = fabgl::i8086::flagsWord();
+  // event registers per the INT 33h callback ABI
+  fabgl::i8086::setAX(cond);
+  fabgl::i8086::setBX(pcMouseBtns);
+  fabgl::i8086::setCX(pcMouseX);
+  fabgl::i8086::setDX(pcMouseY);
+  fabgl::i8086::setDI((uint16_t)(int16_t)pcMouseAccY);   // mickeys (best-effort; SI not settable)
+  fabgl::i8086::setCS(pcCbSeg);                          // jump into the app's handler
+  fabgl::i8086::setIP(pcCbOff);
+  pcInCb = true;
+}
+
+// INT 33h service (AX = function). Returns true (always handled).
+static bool pcInt33Service() {
+  switch (fabgl::i8086::AX()) {
+    case 0x00:  // reset driver + get status
+      fabgl::i8086::setAX(0xFFFF); fabgl::i8086::setBX(2);
+      pcMouseShown = false; pcMouseX = 320; pcMouseY = 100; pcMouseBtns = 0; pcBtnPrev = 0;
+      pcMouseMinX = 0; pcMouseMaxX = 639; pcMouseMinY = 0; pcMouseMaxY = 199;
+      for (int b = 0; b < 3; b++) { pcBtnPressCnt[b] = 0; pcBtnRelCnt[b] = 0; }
+      pcMouseClearCb();
+      return true;
+    case 0x01: pcMouseShown = true;  return true;    // show cursor
+    case 0x02: pcMouseShown = false; return true;    // hide cursor
+    case 0x03:  // get position + buttons
+      fabgl::i8086::setCX(pcMouseX); fabgl::i8086::setDX(pcMouseY); fabgl::i8086::setBX(pcMouseBtns);
+      return true;
+    case 0x04:  // set position
+      pcMouseX = fabgl::i8086::CX(); pcMouseY = fabgl::i8086::DX(); return true;
+    case 0x05: {  // button press info: BX in = button (0=L,1=R,2=M); returns press count + last-press pos
+      int b = fabgl::i8086::BX() & 3; if (b > 2) b = 0;
+      fabgl::i8086::setAX(pcMouseBtns); fabgl::i8086::setBX(pcBtnPressCnt[b]);
+      fabgl::i8086::setCX(pcBtnPressX[b]); fabgl::i8086::setDX(pcBtnPressY[b]);
+      pcBtnPressCnt[b] = 0; return true;
+    }
+    case 0x06: {  // button release info
+      int b = fabgl::i8086::BX() & 3; if (b > 2) b = 0;
+      fabgl::i8086::setAX(pcMouseBtns); fabgl::i8086::setBX(pcBtnRelCnt[b]);
+      fabgl::i8086::setCX(pcBtnRelX[b]); fabgl::i8086::setDX(pcBtnRelY[b]);
+      pcBtnRelCnt[b] = 0; return true;
+    }
+    case 0x07: pcMouseMinX = fabgl::i8086::CX(); pcMouseMaxX = fabgl::i8086::DX(); return true; // X range
+    case 0x08: pcMouseMinY = fabgl::i8086::CX(); pcMouseMaxY = fabgl::i8086::DX(); return true; // Y range
+    case 0x0B:  // read motion counters (mickeys since last call)
+      fabgl::i8086::setCX((uint16_t)(int16_t)pcMouseAccX);
+      fabgl::i8086::setDX((uint16_t)(int16_t)pcMouseAccY);
+      pcMouseAccX = 0; pcMouseAccY = 0; return true;
+    case 0x0C:  // install event handler: CX = event mask, ES:DX = handler far address
+      pcCbMask = fabgl::i8086::CX();
+      pcCbSeg  = fabgl::i8086::ES();
+      pcCbOff  = fabgl::i8086::DX();
+      pcEvPending = false; pcEvCond = 0; pcInCb = false;
+      return true;
+    case 0x21:  // software reset
+      fabgl::i8086::setAX(0x21FF); fabgl::i8086::setBX(2);
+      pcMouseClearCb();
+      return true;
+    default: return true;   // ack everything else so no call ever vectors to a null handler
+  }
+}
+
 // ============================ platform entry points =============================================
 void pcxtSetup() {
   printLog("PCXT Setup... (Intel 8086 + CGA, BIOS = 8086tiny-plus)");
@@ -191,6 +335,8 @@ void pcxtSetup() {
   g_pcxtMachine.setDiskLock([]{ busTake(); }, []{ busGive(); });
   // PC-speaker: mirror PIT ch2 freq + port-0x61 gate into globals the audio ISR reads (speaker.cpp)
   g_pcxtMachine.setSpeakerCallback([](int freq, bool on){ g_pcSpkFreq = freq; g_pcSpkOn = on; });
+  g_pcxtMachine.setInt33Handler(pcInt33Service);   // mouse: serve INT 33h from the USB mouse
+  g_pcxtMachine.setStepHook(pcMouseStepHook);      // mouse: inject the fn 0Ch event-handler far-call
   pcInitDone = true;
 
   // Probe whether the SD library's "r+" preserves the file size (does NOT truncate). Only then enable
@@ -249,6 +395,13 @@ void pcxtLoop() {
     if (OptionsWindow) { vTaskDelay(pdMS_TO_TICKS(20)); continue; }
     if (pcResetReq)    { pcResetReq = false; g_pcxtMachine.trigReset(); }
     g_pcxtMachine.run(40000);
+    // Give INT 33h a non-null vector so DOS programs (e.g. QBASIC) detect a mouse. The emulator
+    // intercepts the actual INT 33h, so this target is never executed. Set only when null (the POST
+    // clears the IVT at boot); leave a real driver's vector alone if one is ever installed.
+    uint8_t* mem = g_pcxtMachine.memory();
+    if (mem && mem[0xCC] == 0 && mem[0xCD] == 0 && mem[0xCE] == 0 && mem[0xCF] == 0) {
+      mem[0xCC] = 0x33; mem[0xCD] = 0x00; mem[0xCE] = 0x00; mem[0xCF] = 0xF0;   // IVT[0x33] = F000:0033
+    }
     vTaskDelay(1);          // feed WDT, let core 0 render
   }
 }
@@ -376,6 +529,20 @@ static void pcxtRenderText() {
       tft.drawString("_", X0 + cc * LCW, (int)(cr * rowH + 0.5f), 1);
     }
   }
+
+  // mouse cursor: a reverse-video block at the mouse cell (INT 33h served from the USB mouse)
+  if (pcMouseShown) {
+    int mc = pcMouseX / 8, mr = pcMouseY / 8;
+    if (mc >= 0 && mc < cols && mr >= 0 && mr < 25) {
+      int yT = (int)(mr * rowH + 0.5f), yB = (int)((mr + 1) * rowH + 0.5f);
+      uint8_t a  = vbuf[(mr * cols + mc) * 2 + 1];
+      uint8_t ch = vbuf[(mr * cols + mc) * 2];
+      char s[2] = { (char)((ch >= 0x20 && ch < 0x7F) ? ch : ' '), 0 };
+      tft.fillRect(X0 + mc * LCW, yT, LCW, (yB - yT) + 1, kCgaRgb565[a & 0x0F]);  // bg := fg (reverse)
+      tft.setTextColor(kCgaRgb565[(a >> 4) & 0x07]);                             // fg := bg
+      tft.drawString(s, X0 + mc * LCW, yT, 1);
+    }
+  }
 }
 
 // Dispatch by CGA mode (text vs graphics). Returns true if it (re)drew, false if the picture was
@@ -403,6 +570,7 @@ bool pcxtRenderFrame() {
   sig ^= (uint32_t)g_pcxtMachine.cgaColorReg() << 3;
   sig ^= (uint32_t)(ga->cursorRow() * 256 + ga->cursorCol()) << 11;
   if (!gfx && ga->cursorVisible() && ((millis() / 400) & 1)) sig ^= 0xCAFEF00Du;  // blink phase (text)
+  if (pcMouseShown) sig ^= (uint32_t)(pcMouseX * 643 + pcMouseY + 1) * 2246822519u;  // mouse cursor moved
 
   bool modeChanged = ((int)gfx != pcRenderGfx);
   if (sig == pcRenderSig && !modeChanged) return false;   // unchanged -> skip render + flush
