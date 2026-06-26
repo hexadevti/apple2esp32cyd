@@ -514,6 +514,11 @@ static void analogJoystickTask(void *pvParameters)
 
 #else
 // No ADC analog joystick on this board: the USB SNES gamepad (usbgamepad.cpp) populates the
-// same globals (joyX/joyY/Pb0-3) and drives applyPlatformInput().
-void joystickSetup() { usbGamepadSetup(); }
+// same globals (joyX/joyY/Pb0-3) and drives applyPlatformInput(). Boards with neither ADC nor a
+// USB host (e.g. the JC1060P470, where USB host is deferred) get input from touch/OSK only.
+void joystickSetup() {
+#if BOARD_INPUT_USB
+  usbGamepadSetup();
+#endif
+}
 #endif // BOARD_INPUT_ANALOG

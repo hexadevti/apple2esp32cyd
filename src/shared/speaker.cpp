@@ -47,7 +47,7 @@ static void IRAM_ATTR spkISR()
     int amp = sound ? ((int)volume << 4) : 0;          // volume 0..0xF0 -> 0..~3840 (kept low: a full
                                                        // square is loud; the slider scales from here)
     int16_t s;
-    if (currentPlatform == PLATFORM_PCXT) {
+    if (currentPlatform == PLATFORM_PCXT || currentPlatform == PLATFORM_TINY386) {
       // PC-speaker: synthesize a square wave at the PIT-ch2 frequency (gated by port 0x61). A phase
       // accumulator advances by `freq` each 44100Hz sample; one full cycle per SPK_FS, high in the
       // first half. Silent when off (the DC blocker decays the held level -> no pop).
@@ -75,10 +75,18 @@ static void speakerTask(void *)
   // Arm the sampling timer from THIS task so its interrupt is allocated on this task's core (core 0),
   // keeping the ISR off core 1 where the USB host lives. 40MHz tick / 907 = ~44101Hz, a near exact
   // match to the I2S rate so the ring barely drifts.
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  // Arduino-ESP32 core 3.x (ESP32-P4): the timer API is frequency-based and folds
+  // write+enable into timerAlarm(). 40 MHz tick / (40e6/SPK_FS) alarm == ~44100 Hz, autoreload.
+  spkTimer = timerBegin(40000000);                     // 40 MHz tick
+  timerAttachInterrupt(spkTimer, &spkISR);
+  timerAlarm(spkTimer, 40000000UL / SPK_FS, true, 0);  // ~44100Hz, autoreload
+#else
   spkTimer = timerBegin(0, 2, true);                   // 80MHz / 2 = 40MHz tick
   timerAttachInterrupt(spkTimer, &spkISR, true);
   timerAlarmWrite(spkTimer, 40000000UL / SPK_FS, true);// ~44100Hz
   timerAlarmEnable(spkTimer);
+#endif
 
   // Shape the raw 1-bit square into something closer to a physical speaker:
   //  * DC blocker (one-pole high-pass, ~10Hz): the cone can't hold a DC offset, so a held level

@@ -38,6 +38,26 @@ static const uint8_t biosrom[] = {
   #include "biosrom.h"
 };
 
+// The 8086tiny BIOS embeds the authentic IBM CP437 8x8 character generator font. Return a pointer to
+// its 256-glyph table (8 bytes/glyph) so the PC-XT text renderer can use the ORIGINAL font instead of
+// an approximation. Found once by scanning for the 'A' (0x41) glyph with a blank 'space'/NUL glyph.
+const uint8_t *pcBiosFont8x8()
+{
+  static const uint8_t *font = nullptr;
+  static bool searched = false;
+  if (searched) return font;
+  searched = true;
+  static const uint8_t A[8] = { 0x7C, 0xC6, 0xC6, 0xFE, 0xC6, 0xC6, 0xC6, 0x00 };
+  for (size_t i = 0x41 * 8; i + 256 * 8 <= sizeof(biosrom); i++) {
+    if (memcmp(biosrom + i, A, 8) != 0) continue;
+    const uint8_t *s = biosrom + i - 0x41 * 8;
+    bool blank = true;
+    for (int k = 0; k < 8; k++) if (s[0x20 * 8 + k] || s[k]) { blank = false; break; }   // space + NUL are blank
+    if (blank) { font = s; break; }
+  }
+  return font;
+}
+
 
 BIOS::BIOS()
   : m_memory(nullptr)

@@ -71,11 +71,21 @@ void oskBuildLayout();
 void oskSetup();
 void oskRender();
 bool oskActive();
+bool oskDirty();   // keyboard needs a repaint (opened / key / shift) — lets heavy renders skip idle flushes
 int oskRasterTop();
 int oskRasterHeight();
 bool touchRead(int16_t *sx, int16_t *sy);
 void oskPoll();
 void oskIgnoreCurrentTouch();
+
+// osg.cpp - on-screen virtual gamepad for the touch-only consoles (NES/Atari/SMS) on the P4
+#if BOARD_PANEL_DSI
+void osgPoll();      // read multi-touch + drive joyX/joyY/Pb0-3 (called instead of oskPoll for those)
+void osgRender();    // redraw the translucent controller into the overlay buffer
+bool osgActive();    // true on NES/Atari/SMS when no menu is open
+bool osgSupported(); // true on NES/Atari/SMS
+int  gt911ReadPoints(int16_t *xs, int16_t *ys, int maxPts);   // multi-touch read (touchkeyboard.cpp)
+#endif
 
 // optionsui.cpp
 void optionsUiSyncSelection();
@@ -241,6 +251,7 @@ void pcxtLoop();                           // run the 8086 in chunks (from loop(
 bool pcxtRenderFrame();                    // CGA render; returns false (skipped) if the picture is unchanged
 void pcxtForceRedraw();                    // force a repaint after a menu/screen clear
 void pcxtSetInput(uint8_t joyMask);        // gamepad -> arrow/enter scancodes
+void pcxtMouseInput(int dx, int dy, uint8_t buttons);  // USB mouse -> INT 33h mouse state
 void pcxtKeyDown(uint8_t hidUsage, bool shift, bool ctrl, bool alt); // USB key -> XT make scancode
 void pcxtKeyUp(uint8_t hidUsage);          // USB key -> XT break scancode
 void pcxtHardReset();                      // soft reboot the PC (mapped to F12)
@@ -250,6 +261,24 @@ void pcxtUnmount(int slot);                // settings: eject the disk in slot 0
 void pcxtScanFiles();                      // settings: rescan SD root for *.img/.ima/.dsk/.vhd
 bool pcxtRenderLoadWarning();              // startup overlay (always false: BIOS shows its own POST)
 void loadPcxtFilesSync();                  // scan SD root -> pcFiles (disk browser)
+
+// tiny386 (Intel i386 + VGA) core entry points (src/tiny386/tiny386.cpp), called by the dispatch.
+// Declared in src/tiny386/tiny386.h; mirrored here so the shared dispatch/render/UI can call them.
+void tiny386Setup();
+void tiny386Loop();
+bool tiny386RenderFrame();
+void tiny386ForceRedraw();
+void tiny386SetInput(uint8_t joyMask);
+void tiny386KeyDown(uint8_t hidUsage, bool shift, bool ctrl, bool alt);
+void tiny386KeyUp(uint8_t hidUsage);
+void tiny386MouseInput(int dx, int dy, uint8_t buttons);
+void tiny386HardReset();
+bool tiny386LoadSelected(const char *path);
+bool tiny386MountA(const char *sel);   // A: floppy: live mount/eject (no reboot)
+bool tiny386MountC(const char *sel);   // C: hard disk: re-attach + soft-reboot the PC (no device restart)
+void tiny386ScanFiles();
+void loadTiny386FilesSync();
+bool tiny386RenderLoadWarning();
 
 // SID sound (src/c64/c64_sid.cpp)
 void sidSetup();                       // init the 3-voice synth + I2S DAC output task

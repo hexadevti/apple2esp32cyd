@@ -1,6 +1,8 @@
 #include "../../emu.h"
 #include "c64.h"
+#if BOARD_HAS_BLE
 #include "esp_bt.h"   // to release the unused Bluetooth controller's reserved DRAM
+#endif               // (absent on the radio-less ESP32-P4)
 
 // Shared render scratch (one 320x8 line band). MALLOC'd on the C64 path only - NOT a static
 // array, because a static would be reserved in BSS for the Apple path too (~10K) and starve
@@ -15,7 +17,10 @@ static uint16_t *c64Scratch = nullptr;
 // ble.ino was removed). Called at the very start of the C64 boot, BEFORE the SD mount and
 // the big C64 allocations, so the reclaimed DMA-capable memory is available to all of them.
 void c64FreeBtMem() {
+#if BOARD_HAS_BLE
   esp_bt_controller_mem_release(ESP_BT_MODE_BTDM);
+#endif
+  // The ESP32-P4 has no Bluetooth controller, so there is nothing to release there.
 }
 
 void c64Setup() {

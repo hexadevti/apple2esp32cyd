@@ -5,6 +5,9 @@
 #include "bootlogo.h"   // embedded boot-splash logo (RGB565)
 #include <esp_system.h>          // esp_reset_reason()
 #include <esp_attr.h>            // RTC_NOINIT_ATTR
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+#include "esp_task_wdt.h"        // esp_task_wdt_reconfigure (core 3.x TWDT, replaces disableCore0WDT)
+#endif
 bool splashActive = true; // true until the boot splash times out or is dismissed
 
 // Boot-splash policy. The SELECT SYSTEM banner only appears on a hardware reset (power-on / RST
@@ -28,9 +31,10 @@ int height = 192;
 static StaticTask_t renderTaskTCB;
 static StackType_t  renderTaskStack[8192];
 
-#if !BOARD_DISPLAY_GFX
+#if !BOARD_DISPLAY_GFX && !defined(BOARD_DESKTOP)
 // On TFT_eSPI boards drawing goes straight to the 320x240 panel; the canvas flush and the
-// UI/video mode switch are no-ops. (The Arduino_GFX boards define these in display_gfx.cpp.)
+// UI/video mode switch are no-ops. (The Arduino_GFX boards define these in display_gfx.cpp;
+// the desktop SDL backend defines them in src/desktop/display_sdl.cpp.)
 void displayFlush() {}
 void displaySetUiMode(bool) {}
 void displaySetVideoRect(int, int) {}
@@ -50,9 +54,15 @@ void videoSetup()
   tft.invertDisplay(true);
   tft.initDMA();
   tft.fillRect(0, 0, 320, 240, TFT_BLACK);
+#if defined(BOARD_DESKTOP)
+  // Desktop: the render loop runs on the MAIN thread (SDL window/events/present must live there);
+  // main() calls renderLoop(NULL) after spawning the CPU thread. Don't spawn it as a task here.
+  printLog("video: renderLoop runs on main thread (desktop)");
+#else
   TaskHandle_t h = xTaskCreateStaticPinnedToCore(renderLoop, "renderLoop", 8192, NULL, 1,
                                                  renderTaskStack, &renderTaskTCB, 0); // core 0
   printLog(h ? "video: renderLoop started" : "video: renderLoop FAILED");
+#endif
 
   // The render task (core 0) owns all the settings-window UI, and that includes BLOCKING SD
   // I/O: directory scans for the file browser and loading disk/PRG/CRT/D64 images. A single
@@ -61,7 +71,19 @@ void videoSetup()
   // idle task and the 5s task watchdog reboots the board mid-SD-transaction (which then wedges
   // the card -> "Card Mount Failed" until a power cycle). Since core 0 legitimately blocks on
   // SD by design, drop the idle-task WDT for this core. Core 1 (the CPU core) keeps its WDT.
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  // IDF 5.x: disableCore0WDT() DELETES the idle task from the TWDT, but its idle hook keeps calling
+  // esp_task_wdt_reset() -> a "task not found" flood every idle tick. Instead RECONFIGURE the TWDT:
+  // stop monitoring the idle tasks (idle_core_mask=0 removes the hooks too) and make it non-panic
+  // with a long timeout, so the render loop's multi-second SD blocking can never reboot the board.
+  esp_task_wdt_config_t twdt = {};
+  twdt.timeout_ms     = 60000;
+  twdt.idle_core_mask = 0;
+  twdt.trigger_panic  = false;
+  esp_task_wdt_reconfigure(&twdt);
+#else
   disableCore0WDT();
+#endif
 }
 
 int red(int color) {
@@ -89,14 +111,14 @@ uint16_t last_x = 0;
 #define SPLASH_MS    12000   // generous: time to read the menu and tap a platform
 #define SPLASH_BTN_Y 164
 #define SPLASH_BTN_H 44
-static const int splashBtnX[8] = {2, 42, 82, 122, 162, 202, 242, 282};  // eight platforms across the 320px panel
-static const int splashBtnW    = 37;                                    // (37px + ~3px gap at 40px pitch)
-static const char *splashLabels[8] = {"APPLE", "C64", "NES", "ATARI", "IIGS", "MSX", "SMS", "PCXT"};
+static const int splashBtnX[9] = {2, 37, 72, 107, 142, 177, 212, 247, 282};  // nine platforms across the 320px panel
+static const int splashBtnW    = 33;                                    // (33px + 2px gap at 35px pitch)
+static const char *splashLabels[9] = {"APPLE", "C64", "NES", "ATARI", "IIGS", "MSX", "SMS", "PCXT", "386"};
 
 static int splashHitTest(int16_t x, int16_t y)
 {
   if (y < SPLASH_BTN_Y || y >= SPLASH_BTN_Y + SPLASH_BTN_H) return -1;
-  for (int i = 0; i < 8; i++)
+  for (int i = 0; i < 9; i++)
     if (x >= splashBtnX[i] && x < splashBtnX[i] + splashBtnW) return i;
   return -1;
 }
@@ -171,6 +193,11 @@ static void splashService()
     splashDrawBtn(PLATFORM_MSX,    "MSX",    true);
     splashDrawBtn(PLATFORM_SMS,    "SMS",    true);
     splashDrawBtn(PLATFORM_PCXT,   "PCXT",   true);
+#if defined(BOARD_JC4827W543) || defined(BOARD_JC1060P470) || defined(BOARD_DESKTOP)
+    splashDrawBtn(PLATFORM_TINY386, "386",   true);    // i386 PC: needs PSRAM (S3/P4/desktop)
+#else
+    splashDrawBtn(PLATFORM_TINY386, "386",   false);   // CYD has no PSRAM -> shown as SOON
+#endif
     drawn = true;
   }
 
@@ -185,6 +212,7 @@ static void splashService()
     else if (b == PLATFORM_MSX)   splashSelect(PLATFORM_MSX);
     else if (b == PLATFORM_SMS)   splashSelect(PLATFORM_SMS);
     else if (b == PLATFORM_PCXT)  splashSelect(PLATFORM_PCXT);
+    else if (b == PLATFORM_TINY386) splashSelect(PLATFORM_TINY386);
     else if (b < 0)               splashFinish();   // tapped outside -> boot current
     return;
   }
@@ -256,6 +284,7 @@ void renderLoop(void *pvParameters)
       continue;
     }
 
+
     // SMS startup overlay: held while no .sms/.bin ROM is loaded. Still poll touch so a tap opens
     // SETTINGS (to pick a ROM); smsRenderLoadWarning() yields to the options window once it opens.
     if (currentPlatform == PLATFORM_SMS && smsRenderLoadWarning())
@@ -269,6 +298,9 @@ void renderLoop(void *pvParameters)
     // On-screen touch keyboard: poll touch every frame so its state is current
     // before we pick the raster geometry below.
     oskPoll();
+#if BOARD_PANEL_DSI
+    osgRender();   // redraw the on-screen virtual gamepad overlay (no-op unless NES/Atari/SMS + dirty)
+#endif
 
     // Modern touch-driven settings window takes over the whole screen (CPU paused).
     if (OptionsWindow)
@@ -401,6 +433,29 @@ void renderLoop(void *pvParameters)
 #endif
       Vertical_blankingOn_Off = true;
       vTaskDelay(pdMS_TO_TICKS(drew ? 16 : 40));
+      continue;
+    }
+
+    // tiny386 (Intel i386 + VGA): the i386 (core 1) runs SeaBIOS/DOS/Windows; nearest-scale the VGA
+    // framebuffer onto the panel here. tiny386RenderFrame() returns false when the picture is
+    // UNCHANGED -> skip the QSPI flush so core 0 stops draining the shared bus (like PC-XT).
+    if (currentPlatform == PLATFORM_TINY386)
+    {
+#if BOARD_DISPLAY_GFX
+      if (clearScr) { tft.fillScreen(TFT_BLACK); tft.fillPanelBlack(); clearScr = false; tiny386ForceRedraw(); }
+#endif
+      bool drew = tiny386RenderFrame();
+      bool osk = oskActive();
+      if (osk) { displaySetUiMode(true); if (oskDirty()) drew = true; oskRender(); }  // flush only when the OSK changed
+#if BOARD_DISPLAY_GFX
+      if (!drew) tft.setBypassCanvas(true);
+#endif
+      Vertical_blankingOn_Off = true;
+      // When the keyboard is open, poll touch fast (12ms) so it stays responsive -- the flush is gated
+      // on oskDirty()/VGA change above, so an idle keyboard frame is cheap. Otherwise cap the render
+      // rate (~22 fps): a 1024x600 frame costs a LOT of PSRAM bandwidth (fb read + canvas write + flush
+      // read), and at 60 fps it saturates the bus the i386 (core 1) shares -> throttling frees the CPU.
+      vTaskDelay(pdMS_TO_TICKS(osk ? 12 : (drew ? 45 : 80)));
       continue;
     }
 

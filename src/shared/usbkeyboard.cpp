@@ -23,7 +23,11 @@
 
 #if BOARD_INPUT_USB
 
-#include "EspUsbHost.h"   // HID_KEY_* / KEYBOARD_MODIFIER_* constants + HID_KEYCODE_TO_ASCII table
+#if BOARD_PANEL_DSI
+#include "p4/usb/EspUsbHost.h"   // P4: vendored EspUsbHost fork, patched for IDF 5.x (in-repo)
+#else
+#include "EspUsbHost.h"   // S3: external fork — HID_KEY_* / KEYBOARD_MODIFIER_* + HID_KEYCODE_TO_ASCII
+#endif
 
 // --- small helpers -------------------------------------------------------------------------
 static bool kbContains(const uint8_t *arr, uint8_t kc)
@@ -244,13 +248,15 @@ static MsxPos msxMap(uint8_t kc)
   }
   return {-1, -1};
 }
-static void msxKeyDown(uint8_t kc) { MsxPos p = msxMap(kc); if (p.col >= 0) msxKeyMatrix(p.row, p.col, true); }
-static void msxKeyUp(uint8_t kc)   { MsxPos p = msxMap(kc); if (p.col >= 0) msxKeyMatrix(p.row, p.col, false); }
+static inline void msxMatrix(int r, int c, bool d) { msxKeyMatrix(r, c, d); }
+static inline void msxJoy(uint8_t m) { msxSetInput(m); }
+static void msxKeyDown(uint8_t kc) { MsxPos p = msxMap(kc); if (p.col >= 0) msxMatrix(p.row, p.col, true); }
+static void msxKeyUp(uint8_t kc)   { MsxPos p = msxMap(kc); if (p.col >= 0) msxMatrix(p.row, p.col, false); }
 static void msxApplyModifiers(bool shift, bool ctrl, bool alt)
 {
-  msxKeyMatrix(6, 0, shift);   // SHIFT (row6,col0)
-  msxKeyMatrix(6, 1, ctrl);    // CTRL  (row6,col1)
-  msxKeyMatrix(6, 2, alt);     // GRAPH (row6,col2) via Alt
+  msxMatrix(6, 0, shift);   // SHIFT (row6,col0)
+  msxMatrix(6, 1, ctrl);    // CTRL  (row6,col1)
+  msxMatrix(6, 2, alt);     // GRAPH (row6,col2) via Alt
 }
 static bool msxIsJoyKey(uint8_t kc)
 {
@@ -265,7 +271,7 @@ static void msxApplyJoystick(const uint8_t *keys)   // active-low: b0 up b1 down
   if (kbContains(keys, HID_KEY_ARROW_LEFT))  m &= ~0x04;
   if (kbContains(keys, HID_KEY_ARROW_RIGHT)) m &= ~0x08;
   if (kbContains(keys, HID_KEY_SPACE))       m &= ~0x10;   // trigger A
-  msxSetInput(m);
+  msxJoy(m);
 }
 // SMS has no keyboard: map the USB keyboard straight to controller 1 (active-low, same bit order).
 static void smsApplyJoystick(const uint8_t *keys)   // b0 up b1 down b2 left b3 right b4 btn1 b5 btn2
@@ -319,6 +325,7 @@ void usbKeyboardReport(uint8_t modifier, const uint8_t *keys, const uint8_t *las
       if (kc == HID_KEY_F12) { smsHardReset();   continue; }   // soft power-cycle
     }
     if (currentPlatform == PLATFORM_PCXT && kc == HID_KEY_F12) { pcxtHardReset(); continue; }  // soft reboot
+    if (currentPlatform == PLATFORM_TINY386 && kc == HID_KEY_F12) { tiny386HardReset(); continue; }  // soft reboot
 
     switch (currentPlatform) {
       case PLATFORM_APPLE2:
@@ -328,6 +335,7 @@ void usbKeyboardReport(uint8_t modifier, const uint8_t *keys, const uint8_t *las
       case PLATFORM_ATARI: if (atariKey(kc, true)) atariApply(); break;
       case PLATFORM_MSX:   if (!(joystick && msxIsJoyKey(kc))) msxKeyDown(kc); break;  // arrows+Space = joystick when JOY on
       case PLATFORM_PCXT:  pcxtKeyDown(kc, shift, ctrl, alt); break;                    // USB key -> XT make scancode
+      case PLATFORM_TINY386: tiny386KeyDown(kc, shift, ctrl, alt); break;              // USB key -> PS/2 make code
     }
   }
 
@@ -344,6 +352,7 @@ void usbKeyboardReport(uint8_t modifier, const uint8_t *keys, const uint8_t *las
       case PLATFORM_ATARI: if (atariKey(kc, false)) atariApply(); break;
       case PLATFORM_MSX:   if (!(joystick && msxIsJoyKey(kc))) msxKeyUp(kc); break;
       case PLATFORM_PCXT:  pcxtKeyUp(kc); break;   // USB key -> XT break scancode
+      case PLATFORM_TINY386: tiny386KeyUp(kc); break;   // USB key -> PS/2 break code
       default: break;   // Apple/IIGS keystrokes are edge-triggered (keymem); nothing to release
     }
   }
@@ -356,7 +365,7 @@ void usbKeyboardReport(uint8_t modifier, const uint8_t *keys, const uint8_t *las
   } else if (currentPlatform == PLATFORM_MSX) {
     msxApplyModifiers(shift, ctrl, alt);
     if (joystick) msxApplyJoystick(keys);   // arrows + Space -> joystick
-    else          msxSetInput(0xFF);        // typing mode: joystick released
+    else          msxJoy(0xFF);             // typing mode: joystick released
   } else if (currentPlatform == PLATFORM_SMS) {
     smsApplyJoystick(keys);                 // joystick-only: arrows + Z/X/Space -> controller 1
   } else if (currentPlatform == PLATFORM_PCXT) {
@@ -388,8 +397,8 @@ void usbKeyboardReset()
   atariDir = 0; atariFire = atariSelect = atariReset = false;
   if (currentPlatform == PLATFORM_ATARI) atariApply();
   if (currentPlatform == PLATFORM_MSX) {
-    msxKeyMatrix(6, 0, false); msxKeyMatrix(6, 1, false); msxKeyMatrix(6, 2, false);
-    msxSetInput(0xFF);
+    msxMatrix(6, 0, false); msxMatrix(6, 1, false); msxMatrix(6, 2, false);
+    msxJoy(0xFF);
   }
   if (currentPlatform == PLATFORM_SMS) smsSetInput(0xFF);
 }

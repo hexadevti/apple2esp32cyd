@@ -531,8 +531,64 @@ static void pcDrawCgaGraphic(uint8_t ch, uint16_t fg, uint16_t bg, int x, int y,
   }
 }
 
+#if BOARD_PANEL_DSI
+const uint8_t *pcBiosFont8x8();   // the authentic IBM CP437 8x8 font, pulled from the BIOS (bios.cpp)
+
+// JC1060P470: render CGA text with the ORIGINAL IBM 8x8 font straight onto the 1024x600 canvas (each
+// cell = one glyph scaled to fill it). Authentic look + real box-drawing/shading glyphs (no GFX-font
+// approximation or connect-the-borders hack). Returns false if the BIOS font isn't found -> GFX path.
+static bool pcxtRenderTextP4() {
+  const uint8_t *font = pcBiosFont8x8();
+  if (!font) return false;
+  bool text80 = (g_pcxtMachine.graphicsAdapter()->emulation()
+                 == fabgl::GraphicsAdapter::Emulation::PC_Text_80x25_16Colors);
+  int cols = text80 ? 80 : 40;
+  const uint8_t* vbuf = g_pcxtMachine.videoMemory() + 0x8000 + g_pcxtMachine.cgaMemOffset();
+
+  for (int r = 0; r < 25; r++) {
+    int y0 = r * PANEL_NATIVE_H / 25, y1 = (r + 1) * PANEL_NATIVE_H / 25;
+    for (int c = 0; c < cols; c++) {
+      uint8_t ch   = vbuf[(r * cols + c) * 2];
+      uint8_t attr = vbuf[(r * cols + c) * 2 + 1];
+      int x0 = c * PANEL_NATIVE_W / cols, x1 = (c + 1) * PANEL_NATIVE_W / cols;
+      tft.drawGlyph8(x0, y0, x1 - x0, y1 - y0, font + ch * 8,
+                     kCgaRgb565[attr & 0x0F], kCgaRgb565[(attr >> 4) & 0x07]);
+    }
+  }
+  // hardware cursor (6845): blink the underline glyph (0x5F) transparently over the cursor cell.
+  fabgl::GraphicsAdapter* ga = g_pcxtMachine.graphicsAdapter();
+  if (ga->cursorVisible() && ((millis() / 400) & 1) == 0) {
+    int cr = ga->cursorRow(), cc = ga->cursorCol();
+    if (cr >= 0 && cr < 25 && cc >= 0 && cc < cols) {
+      int x0 = cc * PANEL_NATIVE_W / cols, x1 = (cc + 1) * PANEL_NATIVE_W / cols;
+      int y0 = cr * PANEL_NATIVE_H / 25,   y1 = (cr + 1) * PANEL_NATIVE_H / 25;
+      tft.drawGlyph8(x0, y0, x1 - x0, y1 - y0, font + 0x5F * 8, kCgaRgb565[15], 0, true);
+    }
+  }
+  // mouse cursor: reverse-video block at the mouse cell (INT 33h served from the USB mouse). The S3
+  // path (pcxtRenderText below) draws this too; replicate it here or the P4 cursor is invisible even
+  // though INT 33h tracks position correctly. Reverse video = draw the cell glyph with fg/bg swapped
+  // (opaque bg paints the whole cell), matching the standard text-mode mouse driver block.
+  if (pcMouseShown) {
+    int mc = pcMouseX / 8, mr = pcMouseY / 8;
+    if (mc >= 0 && mc < cols && mr >= 0 && mr < 25) {
+      uint8_t ch = vbuf[(mr * cols + mc) * 2];
+      uint8_t a  = vbuf[(mr * cols + mc) * 2 + 1];
+      int x0 = mc * PANEL_NATIVE_W / cols, x1 = (mc + 1) * PANEL_NATIVE_W / cols;
+      int y0 = mr * PANEL_NATIVE_H / 25,   y1 = (mr + 1) * PANEL_NATIVE_H / 25;
+      tft.drawGlyph8(x0, y0, x1 - x0, y1 - y0, font + ch * 8,
+                     kCgaRgb565[(a >> 4) & 0x07], kCgaRgb565[a & 0x0F]);   // fg<->bg (reverse)
+    }
+  }
+  return true;   // flushDSI pushes the canvas 1:1 (no displaySetVideoRect this frame)
+}
+#endif
+
 // ---- CGA text render: 80x25 / 40x25 with the built-in 6x8 font (like iigsRenderText) ----
 static void pcxtRenderText() {
+#if BOARD_PANEL_DSI
+  if (pcxtRenderTextP4()) return;            // P4: original IBM 8x8 font, full-screen
+#endif
   tft.setUiMode(true);
   bool osk = oskActive();
   int kbdTop = osk ? oskRasterHeight() : 240;

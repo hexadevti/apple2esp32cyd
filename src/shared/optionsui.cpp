@@ -55,9 +55,9 @@ static void ouiCloseHelp();
 // Toggle grid slots 6 and 7 (bottom-right) are intentionally left empty for two
 // future buttons; navigation skips them.
 #define OUI_TG_COUNT      6
-#if BOARD_DISPLAY_GFX
-// The JC4827W543 adds a SCREEN (fill / original) toggle in grid slot 6, so the later focus
-// targets shift up by one. On the CYD the panel is already 320x240 (nothing to fill) -> no slot.
+#if BOARD_HAS_SCREENFILL
+// The S3 panel + the desktop window add a SCREEN (fill / original) toggle in grid slot 6, so the
+// later focus targets shift up by one. On the CYD the panel is already 320x240 -> no slot.
 #define OUI_FOC_SCREEN    6   // grid slot 6: fill-screen video toggle
 #define OUI_FOC_VOL       7
 #define OUI_FOC_FILES     8
@@ -85,6 +85,12 @@ static bool ouiIsIIgs() { return currentPlatform == PLATFORM_IIGS; }   // shares
 static bool ouiIsMsx() { return currentPlatform == PLATFORM_MSX; }     // ROM/disk browser like NES/Atari
 static bool ouiIsSms() { return currentPlatform == PLATFORM_SMS; }     // ROM browser like NES/Atari/MSX
 static bool ouiIsPcxt() { return currentPlatform == PLATFORM_PCXT; }   // disk-image browser
+static bool ouiIsTiny386() { return currentPlatform == PLATFORM_TINY386; }   // i386 disk-image browser
+// PC platforms (PC-XT + tiny386) share the A:/C: two-slot disk UI. ouiPcA/ouiPcC are the A: floppy /
+// C: hard-disk image markers for the current one.
+static bool ouiIsPC() { return ouiIsPcxt() || ouiIsTiny386(); }
+static String &ouiPcA() { return ouiIsTiny386() ? selectedTiny386FileNameA : selectedPcFileName; }
+static String &ouiPcC() { return ouiIsTiny386() ? selectedTiny386FileName  : selectedPcHdFileName; }
 
 static std::vector<std::string> &ouiFiles()
 {
@@ -94,6 +100,7 @@ static std::vector<std::string> &ouiFiles()
   if (ouiIsMsx()) return msxFiles;
   if (ouiIsSms()) return smsFiles;
   if (ouiIsPcxt()) return pcFiles;
+  if (ouiIsTiny386()) return tiny386Files;
   return HdDisk ? hdFiles : diskFiles;
 }
 
@@ -105,6 +112,7 @@ static std::string ouiSel()
   if (ouiIsMsx()) return std::string(selectedMsxFileName.c_str());
   if (ouiIsSms()) return std::string(selectedSmsFileName.c_str());
   if (ouiIsPcxt()) return std::string(selectedPcFileName.c_str());
+  if (ouiIsTiny386()) return std::string(selectedTiny386FileName.c_str());
   return std::string((HdDisk ? selectedHdFileName : selectedDiskFileName).c_str());
 }
 
@@ -199,7 +207,7 @@ static void ouiClearToggle(int idx)
 // FILL = video scaled to fill the panel (keep 4:3); ORIG = centered 320x240 with a border.
 static void ouiDrawScreenToggle()
 {
-#if BOARD_DISPLAY_GFX
+#if BOARD_HAS_SCREENFILL
   ouiDrawToggle(6, "SCREEN", screenFill ? "FILL" : "ORIG", OUI_TXT);
 #endif
 }
@@ -247,19 +255,34 @@ static void ouiDrawToggles()
     ouiDrawScreenToggle();
     return;
   }
+  if (ouiIsTiny386()) {                        // tiny386 grid: SOUND / VIDEO + i386 speed readout
+    char mhz[14]; snprintf(mhz, sizeof(mhz), "%.0fki/s", tiny386MeasuredMhz);
+    ouiDrawToggle(0, "SOUND",    sound ? "ON" : "MUTE",          OUI_TXT);
+    ouiDrawToggle(1, "VIDEO",    videoColor ? "COLOR" : "MONO",  OUI_TXT);
+    ouiDrawToggle(2, "i386",     mhz,                            OUI_TXT);   // measured throughput (read-only)
+    for (int i = 3; i < 8; i++) ouiClearToggle(i);
+    ouiDrawScreenToggle();
+    return;
+  }
   if (ouiIsNES() || ouiIsAtari()) {           // NES / Atari grid: SOUND / JOYSTICK / VIDEO
     ouiDrawToggle(0, "SOUND",    sound ? "ON" : "MUTE",          OUI_TXT);
     ouiDrawToggle(1, "JOYSTICK", joystick ? "ON" : "OFF",        OUI_TXT);
     ouiDrawToggle(2, "VIDEO",    videoColor ? "COLOR" : "MONO",  OUI_TXT);
+    if (ouiIsNES()) {                         // NES: speed control + measured 2A03 readout
+      ouiDrawToggle(3, "SPEED", nesFast ? "FAST" : "NORMAL", OUI_TXT);
+      char mhz[12]; snprintf(mhz, sizeof(mhz), "%.2fMHz", nesMeasuredMhz);
+      ouiDrawToggle(4, "2A03",  mhz,                        OUI_TXT);   // measured speed (read-only)
 #if BOARD_DISPLAY_GFX
-    if (ouiIsNES()) {                         // NES (S3 only): display frame-skip (game speed vs smoothness)
       const char *sv = (nesDisplaySkip <= 1) ? "OFF" : (nesDisplaySkip == 2) ? "2" : "3";
-      ouiDrawToggle(3, "SKIP", sv, OUI_TXT);
-      for (int i = 4; i < 8; i++) ouiClearToggle(i);
-    } else
+      ouiDrawToggle(5, "SKIP", sv, OUI_TXT);  // S3 only: display frame-skip (smoothness vs core-1 time)
+#else
+      ouiClearToggle(5);
 #endif
-    { for (int i = 3; i < 8; i++) ouiClearToggle(i); }
-    ouiDrawScreenToggle();
+      ouiClearToggle(6);
+    } else {
+      for (int i = 3; i < 8; i++) ouiClearToggle(i);   // Atari: no speed control
+    }
+    ouiDrawScreenToggle();   // slot 6 (S3); drawn after the clears
     return;
   }
   if (ouiIsIIgs()) {                          // IIGS: DEVICE + SPEED + SOUND/JOYSTICK/VIDEO (no II+/IIe)
@@ -278,7 +301,7 @@ static void ouiDrawToggles()
   ouiDrawToggle(3, "SOUND",    sound ? "ON" : "MUTE",           OUI_TXT);
   ouiDrawToggle(4, "JOYSTICK", joystick ? "ON" : "OFF",         OUI_TXT);
   ouiDrawToggle(5, "VIDEO",    videoColor ? "COLOR" : "MONO",   OUI_TXT);
-  ouiDrawScreenToggle();   // slot 6 (S3); slot 7 still free for a future button
+  ouiDrawScreenToggle();   // slot 6: SCREEN (FILL/ORIG); slot 7 = HELP. 6502 MHz shows in the title bar.
 }
 
 static void ouiDrawVolume()
@@ -316,6 +339,7 @@ static void ouiDrawFiles()
                          : ouiIsMsx() ? "MSX ROM/DSK"
                          : ouiIsSms() ? "SMS ROMS"
                          : ouiIsPcxt() ? "PC DISK IMG"
+                         : ouiIsTiny386() ? "386 DISK IMG"
                          : (HdDisk ? "HD IMAGES" : "DISK IMAGES"),
           (int)files.size());
   tft.setTextDatum(BL_DATUM);
@@ -335,8 +359,8 @@ static void ouiDrawFiles()
       if (idx >= (int)files.size()) { tft.fillRect(0, ry, 300, OUI_FB_ROWH, OUI_CARD2); continue; }
 
       bool selected = (idx == shownFile);
-      bool mntA = ouiIsPcxt() && selectedPcFileName.length()   && (files[idx] == std::string(selectedPcFileName.c_str()));
-      bool mntC = ouiIsPcxt() && selectedPcHdFileName.length() && (files[idx] == std::string(selectedPcHdFileName.c_str()));
+      bool mntA = ouiIsPC() && ouiPcA().length() && (files[idx] == std::string(ouiPcA().c_str()));
+      bool mntC = ouiIsPC() && ouiPcC().length() && (files[idx] == std::string(ouiPcC().c_str()));
       bool mounted  = (files[idx] == sel) || mntA || mntC;
       uint16_t rowbg = selected ? OUI_SEL : OUI_CARD2;
       tft.fillRect(0, ry, 300, OUI_FB_ROWH, rowbg);
@@ -405,10 +429,10 @@ static void ouiDrawActions()
   uint16_t mc = canMount ? OUI_MOUNT : OUI_CARD2;
   uint16_t mt = canMount ? OUI_TXT : OUI_LBL;
 
-  if (ouiIsPcxt()) {                       // PCXT: MOUNT/EJECT A: | MOUNT/EJECT C: | REBOOT
+  if (ouiIsPC()) {                         // PC-XT / tiny386: MOUNT/EJECT A: | MOUNT/EJECT C: | REBOOT
     std::vector<std::string> &fl = ouiFiles();
-    bool curA = shownFile < fl.size() && selectedPcFileName.length()   && (fl[shownFile] == std::string(selectedPcFileName.c_str()));
-    bool curC = shownFile < fl.size() && selectedPcHdFileName.length() && (fl[shownFile] == std::string(selectedPcHdFileName.c_str()));
+    bool curA = shownFile < fl.size() && ouiPcA().length() && (fl[shownFile] == std::string(ouiPcA().c_str()));
+    bool curC = shownFile < fl.size() && ouiPcC().length() && (fl[shownFile] == std::string(ouiPcC().c_str()));
     ouiActBtn(4,   102, curA ? "EJECT A:" : "MOUNT A:", curA ? OUI_RED : mc, curA ? OUI_TXT : mt, OUI_FOC_MOUNT);
     ouiActBtn(109, 102, curC ? "EJECT C:" : "MOUNT C:", curC ? OUI_RED : mc, curC ? OUI_TXT : mt, OUI_FOC_MNTREBOOT);
     ouiActBtn(214, 102, "REBOOT",   OUI_REBOOT, OUI_TXT, OUI_FOC_REBOOT);
@@ -435,9 +459,16 @@ static void ouiDrawTitle()
                : ouiIsAtari() ? "ATARI 2600  SETTINGS"
                : ouiIsMsx() ? "MSX1  SETTINGS"
                : ouiIsSms() ? "MASTER SYSTEM  SETTINGS"
-               : ouiIsPcxt() ? "PC-XT (8086)  SETTINGS" : "APPLE II  SETTINGS",
+               : ouiIsPcxt() ? "PC-XT (8086)  SETTINGS"
+               : ouiIsTiny386() ? "PC 386  SETTINGS" : "APPLE II  SETTINGS",
                  10, OUI_TITLE_H / 2, 2);
   int cw = OUI_TITLE_H, cx = 320 - cw;
+  if (currentPlatform == PLATFORM_APPLE2) {     // 6502 speed readout (its grid slot is now SCREEN)
+    char mhz[20]; snprintf(mhz, sizeof(mhz), "6502  %.2f MHz", appleMeasuredMhz);
+    tft.setTextDatum(MR_DATUM);
+    tft.setTextColor(OUI_TXT, OUI_TITLE);
+    tft.drawString(mhz, cx - 8, OUI_TITLE_H / 2, 1);
+  }
   tft.fillRect(cx, 0, cw, OUI_TITLE_H, OUI_RED);
   tft.setTextDatum(MC_DATUM);
   tft.setTextColor(OUI_TXT, OUI_RED);
@@ -545,6 +576,12 @@ static void ouiDrawHelp()
     ouiHelpHdr(y, "PC-XT  -  GAMEPAD");
     ouiHelpRow(y, "D-pad",  "Arrow keys");
     ouiHelpRow(y, "A / B",  "Enter / Esc");
+  } else if (ouiIsTiny386()) {
+    ouiHelpHdr(y, "PC 386  -  DISK");
+    ouiHelpRow(y, "Tap img", "Boot it (reboots)");
+    ouiHelpHdr(y, "PC 386  -  KEYBOARD");
+    ouiHelpRow(y, "Keys",   "Type into the PC");
+    ouiHelpRow(y, "F12",    "Reboot PC");
   } else {   // Apple II / IIGS
     ouiHelpHdr(y, "APPLE  -  KEYBOARD");
     ouiHelpRow(y, "Keys",   "Type into Apple");
@@ -577,7 +614,7 @@ void optionsUiRender()
 // ---------------------------------------------------------------------------
 // Actions
 // ---------------------------------------------------------------------------
-#if BOARD_DISPLAY_GFX
+#if BOARD_HAS_SCREENFILL
 static void ouiToggleScreenFill() { screenFill = !screenFill; optionsUiDirty = true; }
 #endif
 
@@ -626,13 +663,24 @@ static void ouiToggle(int idx)
     optionsUiDirty = true;
     return;
   }
-  if (ouiIsNES() || ouiIsAtari()) {       // NES / Atari grid: SOUND / JOYSTICK / VIDEO (+ SKIP on NES)
+  if (ouiIsTiny386()) {                   // tiny386 grid: SOUND / VIDEO (i386 readout = read-only)
+    switch (idx) {
+      case 0: sound = !sound;           break;
+      case 1: videoColor = !videoColor; break;
+      default: return;                            // slot 2 (i386 throughput) is read-only
+    }
+    optionsUiDirty = true;
+    return;
+  }
+  if (ouiIsNES() || ouiIsAtari()) {       // NES / Atari grid: SOUND / JOYSTICK / VIDEO (+ NES SPEED/SKIP)
     switch (idx) {
       case 0: sound = !sound;           break;
       case 1: joystick = !joystick;     break;
       case 2: videoColor = !videoColor; break;
+      case 3: if (!ouiIsNES()) return;        // NES: SPEED NORMAL <-> FAST (slot 4 = 2A03 MHz, read-only)
+              nesFast = !nesFast; break;
 #if BOARD_DISPLAY_GFX
-      case 3: if (!ouiIsNES()) return;        // NES (S3): cycle display frame-skip 1(off)->2->3
+      case 5: if (!ouiIsNES()) return;        // NES (S3): cycle display frame-skip 1(off)->2->3
               nesDisplaySkip = (nesDisplaySkip >= 3) ? 1 : nesDisplaySkip + 1;
               break;
 #endif
@@ -731,6 +779,13 @@ static void ouiMount()
       showHideOptionsWindow();            // close only on success (failure keeps the old disk)
     return;
   }
+  if (ouiIsTiny386()) {                     // tiny386: double-tap mounts the image as C: (re-attach + PC re-POST)
+    if (shownFile >= files.size()) return;
+    if (ouiIsDir(files[shownFile])) { ouiBrowse(files[shownFile]); return; }
+    tiny386MountC(files[shownFile].c_str());
+    showHideOptionsWindow();
+    return;
+  }
   if (ouiIsIIgs()) {                       // IIGS: persist the highlighted image + reboot -> auto-mounted on boot
     if (shownFile >= files.size()) return;
     if (ouiIsDir(files[shownFile])) { ouiBrowse(files[shownFile]); return; }
@@ -746,25 +801,31 @@ static void ouiMount()
 
 // PCXT: toggle the highlighted image in A: (floppy) / C: (hard disk). If it's already mounted in that
 // slot -> eject (stay in settings so the list/buttons update); otherwise mount it -> close settings.
-static void ouiPcxtMountA()
+static void ouiPcMountA()   // A: floppy
 {
   std::vector<std::string> &files = ouiFiles();
   if (files.empty() || shownFile >= files.size()) return;
-  if (selectedPcFileName.length() && files[shownFile] == std::string(selectedPcFileName.c_str())) {
-    pcxtUnmount(0); optionsUiDirty = true;
-  } else if (pcxtMountA(files[shownFile].c_str())) {
-    showHideOptionsWindow();   // A: floppy inserted (DOS sees the media change live)
+  bool isCur = ouiPcA().length() && files[shownFile] == std::string(ouiPcA().c_str());
+  if (ouiIsTiny386()) {                            // tiny386: live mount/eject, NO device reboot
+    tiny386MountA(isCur ? "" : files[shownFile].c_str());
+    if (isCur) optionsUiDirty = true; else showHideOptionsWindow();
+    return;
   }
+  if (isCur) { pcxtUnmount(0); optionsUiDirty = true; }       // PC-XT: live mount/eject
+  else if (pcxtMountA(files[shownFile].c_str())) showHideOptionsWindow();
 }
-static void ouiPcxtMountC()
+static void ouiPcMountC()   // C: hard disk
 {
   std::vector<std::string> &files = ouiFiles();
   if (files.empty() || shownFile >= files.size()) return;
-  if (selectedPcHdFileName.length() && files[shownFile] == std::string(selectedPcHdFileName.c_str())) {
-    pcxtUnmount(2); optionsUiDirty = true;
-  } else if (pcxtMountC(files[shownFile].c_str())) {
-    showHideOptionsWindow();   // C: hard disk attached (reboot to let DOS detect it)
+  bool isCur = ouiPcC().length() && files[shownFile] == std::string(ouiPcC().c_str());
+  if (ouiIsTiny386()) {                            // tiny386: re-attach C: + soft-reboot the PC (not the device)
+    tiny386MountC(isCur ? "" : files[shownFile].c_str());
+    showHideOptionsWindow();
+    return;
   }
+  if (isCur) { pcxtUnmount(2); optionsUiDirty = true; }
+  else if (pcxtMountC(files[shownFile].c_str())) showHideOptionsWindow();
 }
 
 // Apple "MOUNT + REBOOT": apply the highlighted image as the boot device, save, then restart.
@@ -800,7 +861,7 @@ void optionsUiAdjust(int dir)         // dir: -1 = up, +1 = down
   if (ouiHelpOpen) { ouiCloseHelp(); return; }
   int f = optionsUiFocus;
   if (f >= 0 && f < OUI_TG_COUNT) { ouiToggle(f); return; }
-#if BOARD_DISPLAY_GFX
+#if BOARD_HAS_SCREENFILL
   if (f == OUI_FOC_SCREEN) { ouiToggleScreenFill(); return; }
 #endif
   if (f == OUI_FOC_VOL) {
@@ -828,12 +889,12 @@ void optionsUiActivate()              // joystick fire button on the focused con
   if (ouiHelpOpen) { ouiCloseHelp(); return; }
   int f = optionsUiFocus;
   if (f >= 0 && f < OUI_TG_COUNT) ouiToggle(f);
-#if BOARD_DISPLAY_GFX
+#if BOARD_HAS_SCREENFILL
   else if (f == OUI_FOC_SCREEN)    ouiToggleScreenFill();
 #endif
   else if (f == OUI_FOC_FILES)     ouiMount();
-  else if (f == OUI_FOC_MOUNT)     { if (ouiIsPcxt()) ouiPcxtMountA(); else ouiMount(); }       // PCXT: MOUNT A:
-  else if (f == OUI_FOC_MNTREBOOT) { if (ouiIsPcxt()) ouiPcxtMountC(); else ouiMountReboot(); } // PCXT: MOUNT C:
+  else if (f == OUI_FOC_MOUNT)     { if (ouiIsPC()) ouiPcMountA(); else ouiMount(); }       // PC: MOUNT A:
+  else if (f == OUI_FOC_MNTREBOOT) { if (ouiIsPC()) ouiPcMountC(); else ouiMountReboot(); } // PC: MOUNT C:
   else if (f == OUI_FOC_REBOOT)    ouiReboot();
   // FOC_VOL: nothing (adjust with up/down)
 }
@@ -855,7 +916,7 @@ static void ouiHandleTap(int16_t x, int16_t y)
     int col = x / OUI_TG_W, row = (y - OUI_TG_TOP) / OUI_TG_H;
     int idx = row * 4 + col;
     if (idx < OUI_TG_COUNT) ouiToggle(idx);
-#if BOARD_DISPLAY_GFX
+#if BOARD_HAS_SCREENFILL
     else if (idx == 6) ouiToggleScreenFill();   // grid slot 6 = SCREEN (fill / original)
 #endif
     else if (idx == 7) ouiOpenHelp();           // grid slot 7 = HELP (controls cheat-sheet)
@@ -885,9 +946,9 @@ static void ouiHandleTap(int16_t x, int16_t y)
 
   // action buttons
   if (y >= OUI_ACT_TOP && y < OUI_ACT_TOP + OUI_ACT_H) {
-    if (ouiIsPcxt()) {                      // MOUNT A: (4..106) | MOUNT C: (109..211) | REBOOT (214..316)
-      if (x >= 4 && x < 106)        ouiPcxtMountA();
-      else if (x >= 109 && x < 211) ouiPcxtMountC();
+    if (ouiIsPC()) {                        // MOUNT A: (4..106) | MOUNT C: (109..211) | REBOOT (214..316)
+      if (x >= 4 && x < 106)        ouiPcMountA();
+      else if (x >= 109 && x < 211) ouiPcMountC();
       else if (x >= 214 && x < 316) ouiReboot();
     } else if (ouiIsC64() || ouiIsNES() || ouiIsAtari() || ouiIsMsx() || ouiIsSms()) {   // LOAD & RUN (6..126) | REBOOT (132..314)
       if (x >= 6 && x < 126)        ouiMount();
@@ -924,6 +985,7 @@ void optionsUiOpen()
   if (ouiIsMsx() && msxFiles.empty()) msxScanFiles();       // populate the .rom/.dsk browser
   if (ouiIsSms() && smsFiles.empty()) smsScanFiles();       // populate the .sms/.bin browser
   if (ouiIsPcxt() && pcFiles.empty()) pcxtScanFiles();      // populate the disk-image browser
+  if (ouiIsTiny386() && tiny386Files.empty()) tiny386ScanFiles();  // populate the 386 disk-image browser
   optionsUiSyncSelection();
   optionsUiFocus       = 0;
   ouiHelpOpen          = false;  // always open on the settings page, not the help overlay

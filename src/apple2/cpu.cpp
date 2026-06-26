@@ -201,8 +201,8 @@ void cpuLoop() {
 
     opcode = read8(PC++);
 
-    // Throughput meter: report effective MHz / instr-per-sec every ~256K instructions.
-    if (perfMeter)
+    // Throughput meter: update the live measured 6502 speed (appleMeasuredMhz, shown read-only in
+    // Settings as "6502 / X.XMHz") every ~256K instructions. Also prints to Serial when perfMeter is on.
     {
       static uint32_t mInstr = 0;
       static uint64_t mCyc = 0;
@@ -216,7 +216,11 @@ void cpuLoop() {
         {
           float secs = (now - mLast) / 1000.0f;
           if (secs > 0)
-            Serial.printf("PERF: %.2f MHz, %lu instr/s\n", (mCyc / 1e6) / secs, (unsigned long)(mInstr / secs));
+          {
+            appleMeasuredMhz = (float)((mCyc / 1e6) / secs);
+            if (perfMeter)
+              Serial.printf("PERF: %.2f MHz, %lu instr/s\n", appleMeasuredMhz, (unsigned long)(mInstr / secs));
+          }
         }
         mLast = now;
         mInstr = 0;
@@ -226,18 +230,31 @@ void cpuLoop() {
 
     if (!Fast1MhzSpeed)
     {
+#if defined(BOARD_DESKTOP)
+      // Desktop: pace to a true 1.000 MHz by locking emulated cycles to real microseconds
+      // (1 emulated cycle == 1 us), self-correcting regardless of host emulation overhead. The ESP
+      // cycle-count tuning below (expectedDiff=300 @ 240 MHz) gives only ~0.8 MHz on a PC because the
+      // host getCycleCount() is microsecond-derived, not a real 240 MHz counter.
+      static uint32_t paceBaseUs = 0, paceCyc = 0;
+      uint32_t elapsed = (uint32_t)micros() - paceBaseUs;
+      if ((int32_t)(elapsed - paceCyc) > 100000)            // (re)anchor at boot / after a FAST burst
+        { paceBaseUs = (uint32_t)micros(); paceCyc = 0; }
+      paceCyc += (uint32_t)cycles[opcode];
+      while ((uint32_t)((uint32_t)micros() - paceBaseUs) < paceCyc) { }   // spin until real time catches up
+#else
       int cycleCount = cycles[opcode];
       cpuCycleCount = ESP.getCycleCount();
       uint32_t expectedDiff = 300;
 
       diffCpuCycleCount = cpuCycleCount - lastCpuCycleCount;
-      while (diffCpuCycleCount < expectedDiff * cycleCount)  
+      while (diffCpuCycleCount < expectedDiff * cycleCount)
       {
         cpuCycleCount = ESP.getCycleCount();
         diffCpuCycleCount = cpuCycleCount - lastCpuCycleCount;
       }
 
       lastCpuCycleCount = cpuCycleCount;
+#endif
     }
     
     // // if (joystick) 

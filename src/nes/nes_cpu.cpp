@@ -172,21 +172,40 @@ void cpuLoop() {
   cpuReset();
   lastPC = PC;
 
-  // Lightweight FPS readout: gated on the frame counter changing (≤60 checks/sec), so it adds no
-  // per-instruction cost. 60 = full speed.
+  // Frame pacing + FPS/MHz readout, gated on the frame counter changing (≤speed checks/sec) so it
+  // adds no per-instruction cost. NORMAL mode (default) paces to the real ~60.0988 fps; FAST runs
+  // uncapped. nesMeasuredMhz is derived from fps x the NES's fixed CPU cycles/frame.
+  const uint32_t NES_FRAME_US = 16639;        // 1e6 / 60.0988 fps (NTSC)
   uint32_t fpsLastMs = millis(), fpsLastFrames = nesFrameCount, fpsSeenFrame = nesFrameCount;
+  uint32_t nextFrameUs = micros();
 
   while (running) {
-    while (paused) { delay(100); fpsLastMs = millis(); fpsLastFrames = nesFrameCount; }
+    while (paused) { delay(100); fpsLastMs = millis(); fpsLastFrames = nesFrameCount; nextFrameUs = micros(); }
 
     // A new ROM was loaded from the settings window -> reset CPU+PPU to start it cleanly.
-    if (nesResetReq) { nesResetReq = false; ppuReset(); cpuReset(); lastPC = PC; }
+    if (nesResetReq) { nesResetReq = false; ppuReset(); cpuReset(); lastPC = PC; nextFrameUs = micros(); }
 
     if (nesFrameCount != fpsSeenFrame) {        // a frame just completed
       fpsSeenFrame = nesFrameCount;
+
+      // Pace to ~60 fps in NORMAL mode (FAST = uncapped). Sleep the bulk, spin the last ~1.5ms for
+      // a steady cadence; resync if we ever fall far behind.
+      if (!nesFast) {
+        nextFrameUs += NES_FRAME_US;
+        int32_t wait = (int32_t)(nextFrameUs - micros());
+        if (wait > 2000) vTaskDelay(pdMS_TO_TICKS((uint32_t)(wait - 1500) / 1000));
+        while ((int32_t)(nextFrameUs - micros()) > 0) { /* spin to the frame boundary */ }
+        if ((int32_t)(micros() - nextFrameUs) > (int32_t)(4 * NES_FRAME_US)) nextFrameUs = micros();
+      } else {
+        nextFrameUs = micros();
+      }
+
       uint32_t nowMs = millis();
       if (nowMs - fpsLastMs >= 1000) {
-        sprintf(buf, "NES fps=%u heap=%u", (unsigned)(nesFrameCount - fpsLastFrames),
+        uint32_t frames = nesFrameCount - fpsLastFrames;
+        float secs = (nowMs - fpsLastMs) / 1000.0f;
+        if (secs > 0) nesMeasuredMhz = (frames / secs) * (29780.5f / 1.0e6f);   // fps x CPU cycles/frame
+        sprintf(buf, "NES fps=%u %.2fMHz heap=%u", (unsigned)frames, nesMeasuredMhz,
                 (unsigned)ESP.getFreeHeap());
         printLog(buf);
         fpsLastMs = nowMs; fpsLastFrames = nesFrameCount;

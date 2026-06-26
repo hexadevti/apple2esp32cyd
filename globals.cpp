@@ -34,6 +34,7 @@ std::vector<std::string> atariFiles;   // Atari 2600 .a26/.bin ROMs on SD
 std::vector<std::string> msxFiles;     // MSX1 .rom/.mx1/.dsk images on SD
 std::vector<std::string> smsFiles;     // SMS .sms/.bin ROM images on SD
 std::vector<std::string> pcFiles;      // PCXT .img/.ima/.dsk/.vhd disk images on SD
+std::vector<std::string> tiny386Files; // tiny386 .img/.ima/.vhd/.hdd disk images on SD
 
 // keyboard
 unsigned short keyboard_data[3] = {0, 0, 0};
@@ -69,6 +70,8 @@ bool upscale = false;
 bool smoothUpscale = false;
 bool screenFill = false;   // JC4827W543: fill the 480x272 panel with the 320x240 video (keep 4:3)
 uint8_t nesDisplaySkip = 3; // JC4827W543 NES: draw 1 of every N frames (core-0 display-skip frees the core-1 interpreter)
+bool nesFast = false;       // NES: NORMAL (paced ~60fps) by default; true = FAST (uncapped)
+float nesMeasuredMhz = 0.0f; // NES: measured 2A03 speed (fps-derived), updated in cpuLoop
 bool AppleIIe = true;
 bool OptionsWindow = false;
 bool DebugWindow = false;
@@ -107,6 +110,10 @@ String selectedPcFileName;    // PCXT A: floppy image (for the settings file bro
 String selectedPcHdFileName;  // PCXT C: hard-disk image (auto-mounted on boot)
 bool pcFast = false;          // PCXT: reserved speed flag
 float pcMeasuredMhz = 0.0f;   // PCXT: measured 8086 equivalent speed from the boot benchmark
+String selectedTiny386FileName;   // tiny386: C: hard-disk image (hda) (settings file browser)
+String selectedTiny386FileNameA;  // tiny386: A: floppy image (fda) (settings file browser)
+float tiny386MeasuredMhz = 0.0f;  // tiny386: measured i386 throughput (boot benchmark)
+float appleMeasuredMhz = 0.0f; // Apple II: live measured 6502 speed (updated in cpuLoop)
 volatile int  g_pcSpkFreq = 0;     // PCXT PC-speaker: PIT ch2 frequency (Hz)
 volatile bool g_pcSpkOn   = false; // PCXT PC-speaker: gate+data enabled (port 0x61)
 bool c64Autoload = false;     // C64: auto-load the saved image on boot

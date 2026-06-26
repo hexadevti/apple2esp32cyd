@@ -25,22 +25,29 @@ the **Apple IIGS, which is still in development** (experimental):
 
 ## Supported boards
 
-emu6502 builds for **two boards** from the same source tree — the target is selected at *compile time*
-by a single macro (`-DBOARD_JC4827W543`), defined per build task. The hardware abstraction lives in
-[`board.h`](board.h) as capability macros (display backend, audio path, input path, touch bus) that the
-shared code switches on.
+emu6502 builds for **three boards** from the same source tree — the target is selected at *compile time*
+by a single macro (`-DBOARD_JC4827W543` / `-DBOARD_JC1060P470`), defined per build task. The hardware
+abstraction lives in [`board.h`](board.h) as capability macros (display backend, audio path, input
+path, touch bus) that the shared code switches on.
 
-| | **ESP32 CYD** (default) | **Guition JC4827W543** |
-| --- | --- | --- |
-| MCU | ESP32-WROOM-32 (no PSRAM) | ESP32-S3 (OPI PSRAM) |
-| Display | ILI9341 320×240 SPI, via TFT_eSPI | NV3041A 480×272 QSPI, via Arduino_GFX |
-| Input | PS/2 keyboard + analog joystick/paddles | **USB SNES gamepad + USB keyboard** (USB-HID host) |
-| On-screen keyboard | XPT2046 touch (display bus) | XPT2046 touch (dedicated SPI bus) |
-| Audio | Internal DAC (GPIO26) → on-board amp | I2S → NS4168 Class-D amp |
-| Storage | microSD (VSPI) | microSD (shared HSPI w/ touch) |
+| | **ESP32 CYD** (default) | **Guition JC4827W543** | **Guition JC1060P470** |
+| --- | --- | --- | --- |
+| MCU | ESP32-WROOM-32 (no PSRAM) | ESP32-S3 (OPI PSRAM) | ESP32-P4 (32MB PSRAM) |
+| Display | ILI9341 320×240 SPI, via TFT_eSPI | NV3041A 480×272 QSPI, via Arduino_GFX | JD9165 1024×600 **MIPI-DSI**, via esp_lcd |
+| Input | PS/2 keyboard + analog joystick/paddles | **USB SNES gamepad + USB keyboard** (USB-HID host) | USB-HID host + touch |
+| On-screen keyboard | XPT2046 touch (display bus) | XPT2046 touch (dedicated SPI bus) | **GT911** capacitive (I2C) |
+| Audio | Internal DAC (GPIO26) → on-board amp | I2S → NS4168 Class-D amp | I2S → **ES8311 codec** → NS4150B amp |
+| Storage | microSD (VSPI) | microSD (shared HSPI w/ touch) | microSD (**SD_MMC** / SDIO) |
 
 The "CYD" target is the [ESP32-2432S024](https://github.com/jpduhen/CYD_2.4inch_ESP32-2432S024)
 (2.4″, ILI9341); the 2.8″ ESP32-2432S028 shares the same driver and pin map.
+
+> **JC1060P470 (ESP32-P4)** — working & verified on hardware (display, GT911 touch, on-screen keyboard,
+> ES8311 audio, SD_MMC, and USB host via a vendored IDF-5-patched EspUsbHost fork). It is built against Arduino-ESP32
+> **core 3.x** (IDF 5.x) on an *isolated* toolchain (its own `ARDUINO_DIRECTORIES_DATA/USER` at
+> `~/.emu6502-p4`, outside the repo), so the CYD/S3 builds stay on 2.0.17 and unchanged. It needs the
+> JD9165 `esp_lcd` vendor driver dropped in — see [`src/shared/p4/README.md`](src/shared/p4/README.md)
+> for the one-time setup, status notes, and fallback levers.
 
 ---
 

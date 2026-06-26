@@ -72,7 +72,7 @@ void cartWrite(int slot, uint16_t a, uint8_t v) {
 // fMSX/blueMSX-style write-address heuristic.
 static int detectMapper(const uint8_t* d, int size) {
   if (size <= 0x8000) return MAP_PLAIN;                         // 8/16/32K linear
-  int konami = 0, scc = 0, ascii8 = 0, ascii16 = 0;
+  int konami = 0, scc = 0, ascii8 = 0, ascii16 = 0, a8only = 0;
   for (int i = 0; i + 2 < size; i++) {
     if (d[i] != 0x32) continue;                                 // LD (nn),A
     uint16_t addr = (uint16_t)(d[i + 1] | (d[i + 2] << 8));
@@ -81,7 +81,7 @@ static int detectMapper(const uint8_t* d, int size) {
       case 0x8000: case 0xA000: konami++; break;
       case 0x5000: case 0x9000: case 0xB000: scc++; break;
       case 0x7000: scc++; ascii8++; ascii16++; break;
-      case 0x6800: case 0x7800: ascii8++; break;
+      case 0x6800: case 0x7800: ascii8++; a8only++; break;      // registers UNIQUE to ASCII8
       case 0x77FF: ascii16++; break;
     }
   }
@@ -89,6 +89,9 @@ static int detectMapper(const uint8_t* d, int size) {
   if (scc     > bv) { bv = scc;     best = MAP_SCC; }
   if (ascii8  > bv) { bv = ascii8;  best = MAP_ASCII8; }
   if (ascii16 > bv) { bv = ascii16; best = MAP_ASCII16; }
+  // ASCII16 ROMs touch only 0x6000/0x7000 -> they tie ASCII8 and lose above. A genuine ASCII8 ROM
+  // must write its unique bank registers 0x6800/0x7800; without those it's ASCII16.
+  if (best == MAP_ASCII8 && a8only == 0) best = MAP_ASCII16;
   return best;
 }
 

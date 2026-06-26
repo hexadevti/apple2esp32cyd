@@ -7,7 +7,11 @@
 // drove (joyX/joyY/Pb0-3) and hand off to the shared applyPlatformInput(). Apple II also gets
 // paddle (timerpdl) updates.
 //
-// Build target only: BOARD_INPUT_USB (the JC4827W543). The CYD keeps its analog joystick.
+// Build target only: BOARD_INPUT_USB (the JC4827W543, and the JC1060P470 P4). The CYD keeps its
+// analog joystick. On the P4 the same EspUsbHost code runs on the native USB-HS OTG controller; if
+// that library does not build/enumerate under core 3.x, set BOARD_INPUT_USB=0 (board.h) — touch +
+// the on-screen keyboard then provide full input. The core-1 pinning below still applies on the P4
+// (its render loop is on core 0 too).
 //
 // Report format (decoded from a real pad over serial; 8-byte report):
 //   byte0 = X axis  (0x00 left, ~0x7F center, 0xFF right)
@@ -20,7 +24,11 @@
 
 #if BOARD_INPUT_USB
 
-#include "EspUsbHost.h"
+#if BOARD_PANEL_DSI
+#include "p4/usb/EspUsbHost.h"   // P4: vendored EspUsbHost fork, patched for IDF 5.x (in-repo)
+#else
+#include "EspUsbHost.h"          // S3: external apple2esp32 fork (IDF 4.4)
+#endif
 
 #define GP_AXIS_X     0
 #define GP_AXIS_Y     1
@@ -35,7 +43,7 @@
 #define GP_LOG_RAW    0
 // Set to 1 to log every HID report (onReceive + onKeyboard) to serial, e.g. to capture a keyboard's
 // media-key report format when adding a new shortcut.
-#define USB_RX_DEBUG  0
+#define USB_RX_DEBUG  0   // log every HID report (set 1 to diagnose a new controller/keyboard/mouse)
 
 // NOTE on hot-swap: after a device disconnect the ESP32-S3 USB host leaves the root port wedged,
 // and the next plugged device fails to enumerate ("HUB: Failed to issue second reset / Root port
@@ -62,8 +70,20 @@ public:
     // typing is untouched and still flows through onKeyboard).
     if (handleConsumerVolume(transfer->data_buffer, transfer->actual_num_bytes)) return;
     // Keyboard/mouse are handled by the base class (onKeyboard below); only decode the gamepad here.
-    if (ep->bInterfaceProtocol == HID_ITF_PROTOCOL_KEYBOARD ||
-        ep->bInterfaceProtocol == HID_ITF_PROTOCOL_MOUSE) return;
+    if (ep->bInterfaceProtocol == HID_ITF_PROTOCOL_MOUSE) {
+      // Parse the raw HID mouse report ourselves (the library's onMouse misparses this device): layout
+      // is [buttons][dx][dy], possibly behind a 1-byte report ID. This keyboard's embedded mouse sends
+      // 6 bytes with ID=0x01 first; a plain boot mouse sends 3-4 bytes with no ID. dx/dy are signed.
+      const uint8_t *d = transfer->data_buffer; int n = transfer->actual_num_bytes;
+      int off = (n >= 5) ? 1 : 0;
+      if (n >= off + 3) {
+        int8_t mdx = (int8_t)d[off + 1], mdy = (int8_t)d[off + 2]; uint8_t mb = d[off + 0];
+        if (currentPlatform == PLATFORM_TINY386) tiny386MouseInput(mdx, mdy, mb);  // -> PS/2 mouse
+        else                                     pcxtMouseInput(mdx, mdy, mb);     // -> INT 33h
+      }
+      return;
+    }
+    if (ep->bInterfaceProtocol == HID_ITF_PROTOCOL_KEYBOARD) return;
     parseGamepad(transfer->data_buffer, transfer->actual_num_bytes);
   }
 
@@ -77,6 +97,9 @@ public:
 #endif
     usbKeyboardReport(report.modifier, report.keycode, last_report.keycode);
   }
+
+  // Mouse is parsed from the raw report in onReceive() above (the library's onMouse misparses this
+  // device's report-ID'd layout), so no onMouse override here.
 
   void onGone(const usb_host_client_event_msg_t *eventMsg) override {
     joyX = joyY = 1; Pb0 = Pb1 = Pb2 = Pb3 = false;
