@@ -114,6 +114,7 @@ String selectedTiny386FileName;   // tiny386: C: hard-disk image (hda) (settings
 String selectedTiny386FileNameA;  // tiny386: A: floppy image (fda) (settings file browser)
 float tiny386MeasuredMhz = 0.0f;  // tiny386: measured i386 throughput (boot benchmark)
 float appleMeasuredMhz = 0.0f; // Apple II: live measured 6502 speed (updated in cpuLoop)
+float appleClockMhz = 1.0f;    // Apple II: target clock when throttled (1.0 = stock 1 MHz; UI-adjustable on desktop)
 volatile int  g_pcSpkFreq = 0;     // PCXT PC-speaker: PIT ch2 frequency (Hz)
 volatile bool g_pcSpkOn   = false; // PCXT PC-speaker: gate+data enabled (port 0x61)
 bool c64Autoload = false;     // C64: auto-load the saved image on boot

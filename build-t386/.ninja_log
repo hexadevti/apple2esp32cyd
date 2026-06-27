@@ -221,3 +221,6 @@
 9551	11718	8042048791162387	CMakeFiles/emu6502.dir/src/desktop/main.cpp.obj	d20e31e94fcac51f
 9456	11744	8042048790215983	CMakeFiles/emu6502.dir/src/desktop/input_sdl.cpp.obj	f586e3958c44b653
 11745	12671	8042048813104181	emu6502.exe	3b5806f7e28eacef
+4	46	8042060054053458	C:/Users/lucia/repos/emu6502/build-t386/CMakeFiles/cmake.verify_globs	2fb31d1d6f18dd15
+79	1455	8042060054798833	CMakeFiles/emu6502.dir/src/shared/video.cpp.obj	ba6300bf023ed6f1
+1456	2620	8042060068565673	emu6502.exe	3b5806f7e28eacef

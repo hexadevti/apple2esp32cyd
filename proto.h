@@ -117,6 +117,12 @@ unsigned char pull8();
 void cpuLoop();
 void setflags();
 
+// apple2_roms.cpp - system ROMs loaded from /roms/apple2 on the SD card (no longer embedded)
+bool apple2LoadRoms();            // load all 5 ROMs; false if any is missing or the wrong size
+bool apple2EnsureHdRom();         // load just /roms/apple2/hd.bin (shared with the IIGS slot 7); cached
+bool apple2RenderLoadWarning();   // renderLoop hook: draw the "ROMs not found" screen while halted
+extern bool apple2RomLoadFailed;  // set when apple2LoadRoms() failed -> the 6502 stays halted
+
 // memory.cpp
 void memoryAlloc();
 void showFreeMem();
@@ -142,6 +148,7 @@ void nextDiskFile();
 void prevDiskFile();
 void saveDiskFile();
 void setDiskFile();
+void apple2InsertDisk(const char *path);   // hot-swap the floppy by path (no reboot)
 void loadDiskFilesSync();
 void loadDiskAsync(void *pvParameters);
 int getOffset(int track, int sector);

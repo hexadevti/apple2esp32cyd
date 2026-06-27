@@ -1,3 +1,4 @@
+#if !defined(BOARD_JC4827W543)  // tiny386 is not built for the S3 board (too big; vendored core not wired for the device toolchain)
 /*
  * Dummy VGA device
  * 
@@ -2493,3 +2494,5 @@ static void vga_initmode(VGAState *s)
 
     s->ar_index = 0x20;
 }
+
+#endif // !defined(BOARD_JC4827W543)

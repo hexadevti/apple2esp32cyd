@@ -1,3 +1,4 @@
+#if !defined(BOARD_JC4827W543)  // tiny386 is not built for the S3 board (too big; vendored core not wired for the device toolchain)
 /*
  * Simple PCI bus driver
  * 
@@ -623,3 +624,5 @@ void i440fx_map_interrupts(I440FXState *s, uint8_t *elcr,
         }
     }
 }
+
+#endif // !defined(BOARD_JC4827W543)

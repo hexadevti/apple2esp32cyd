@@ -1,3 +1,4 @@
+#if !defined(BOARD_JC4827W543)  // tiny386 is not built for the S3 board (too big; vendored core not wired for the device toolchain)
 #include "pc.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -991,3 +992,5 @@ int parse_conf_ini(void* user, const char* section,
 #undef NAME
 	return 1;
 }
+
+#endif // !defined(BOARD_JC4827W543)

@@ -25,6 +25,32 @@ static uint8_t* pcAllocFast(size_t n) {                 // internal SRAM first, 
   if (!p) p = (uint8_t*)ps_malloc(n);
   return p;
 }
+
+// Read /roms/pcxt/bios.bin off the SD card into a malloc'd buffer (kept for the session). Defined
+// here because the fabgl BIOS TU (fabgl/bios.cpp, GPLv3) doesn't include emu.h / the Arduino SD API;
+// BIOS::init + pcBiosFont8x8 call this to fetch what used to be the embedded `biosrom` array.
+uint8_t* pcxtReadBiosRom(size_t* outLen) {
+  *outLen = 0;
+  busTake();
+  File f = FSTYPE.open("/roms/pcxt/bios.bin", FILE_READ);
+  int len = f ? (int)f.size() : 0;
+  if (!f || len <= 0 || len > 64 * 1024) {
+    if (f) f.close(); busGive();
+    printLog("PC-XT: /roms/pcxt/bios.bin missing or bad size - cannot boot");
+    return nullptr;
+  }
+  uint8_t* b = (uint8_t*)ps_malloc(len);
+  if (!b) b = (uint8_t*)malloc(len);
+  if (!b) { f.close(); busGive(); printLog("PC-XT: BIOS alloc failed"); return nullptr; }
+  int rd = 0;
+  while (rd < len) { int n = f.read(b + rd, (len - rd > 8192) ? 8192 : (len - rd)); if (n <= 0) break; rd += n; }
+  f.close();
+  busGive();
+  if (rd != len) { free(b); return nullptr; }
+  *outLen = (size_t)len;
+  sprintf(buf, "PC-XT: BIOS loaded from /roms/pcxt/bios.bin (%d bytes)", len); printLog(buf);
+  return b;
+}
 static bool pcEndsCI(const std::string& s, const char* suf) {
   size_t n = strlen(suf); if (s.size() < n) return false;
   for (size_t i = 0; i < n; i++)

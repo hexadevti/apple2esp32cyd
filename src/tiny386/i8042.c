@@ -1,3 +1,4 @@
+#if !defined(BOARD_JC4827W543)  // tiny386 is not built for the S3 board (too big; vendored core not wired for the device toolchain)
 /*
  * QEMU PC keyboard emulation
  *
@@ -928,3 +929,5 @@ PS2MouseState *ps2_mouse_init(void (*update_irq)(void *, int), void *update_arg)
     ps2_reset(&s->common);
     return s;
 }
+
+#endif // !defined(BOARD_JC4827W543)

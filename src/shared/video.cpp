@@ -193,10 +193,10 @@ static void splashService()
     splashDrawBtn(PLATFORM_MSX,    "MSX",    true);
     splashDrawBtn(PLATFORM_SMS,    "SMS",    true);
     splashDrawBtn(PLATFORM_PCXT,   "PCXT",   true);
-#if defined(BOARD_JC4827W543) || defined(BOARD_JC1060P470) || defined(BOARD_DESKTOP)
-    splashDrawBtn(PLATFORM_TINY386, "386",   true);    // i386 PC: needs PSRAM (S3/P4/desktop)
+#if defined(BOARD_JC1060P470) || defined(BOARD_DESKTOP)
+    splashDrawBtn(PLATFORM_TINY386, "386",   true);    // i386 PC: P4 / desktop only
 #else
-    splashDrawBtn(PLATFORM_TINY386, "386",   false);   // CYD has no PSRAM -> shown as SOON
+    splashDrawBtn(PLATFORM_TINY386, "386",   false);   // S3 (not built here) / CYD (no PSRAM) -> shown as SOON
 #endif
     drawn = true;
   }
@@ -290,6 +290,14 @@ void renderLoop(void *pvParameters)
     if (currentPlatform == PLATFORM_SMS && smsRenderLoadWarning())
     {
       oskPoll();                       // a screen tap opens SETTINGS even while the notice is up
+      Vertical_blankingOn_Off = true;
+      vTaskDelay(pdMS_TO_TICKS(20));
+      continue;
+    }
+
+    // Apple II startup overlay: held when the system ROMs are missing from /roms/apple2 on the SD card.
+    if (currentPlatform == PLATFORM_APPLE2 && apple2RenderLoadWarning())
+    {
       Vertical_blankingOn_Off = true;
       vTaskDelay(pdMS_TO_TICKS(20));
       continue;
@@ -444,18 +452,26 @@ void renderLoop(void *pvParameters)
 #if BOARD_DISPLAY_GFX
       if (clearScr) { tft.fillScreen(TFT_BLACK); tft.fillPanelBlack(); clearScr = false; tiny386ForceRedraw(); }
 #endif
-      bool drew = tiny386RenderFrame();
+      bool vgaDrew = tiny386RenderFrame();
       bool osk = oskActive();
-      if (osk) { displaySetUiMode(true); if (oskDirty()) drew = true; oskRender(); }  // flush only when the OSK changed
-#if BOARD_DISPLAY_GFX
-      if (!drew) tft.setBypassCanvas(true);
+      bool oskChanged = false;
+      if (osk) { displaySetUiMode(true); oskChanged = oskDirty(); oskRender(); }  // oskDirty before oskRender clears it
+#if BOARD_PANEL_DSI
+      if (osk && oskChanged && !vgaDrew) {
+        tft.flushOskBand();          // only the keyboard changed -> push just its band (cheap), and
+        tft.setBypassCanvas(true);   // skip the loop-top full 1024x600 composite (that made it laggy)
+      } else
 #endif
+      {
+#if BOARD_DISPLAY_GFX
+        if (!(vgaDrew || oskChanged)) tft.setBypassCanvas(true);   // nothing changed -> skip the flush
+#endif
+      }
       Vertical_blankingOn_Off = true;
-      // When the keyboard is open, poll touch fast (12ms) so it stays responsive -- the flush is gated
-      // on oskDirty()/VGA change above, so an idle keyboard frame is cheap. Otherwise cap the render
-      // rate (~22 fps): a 1024x600 frame costs a LOT of PSRAM bandwidth (fb read + canvas write + flush
-      // read), and at 60 fps it saturates the bus the i386 (core 1) shares -> throttling frees the CPU.
-      vTaskDelay(pdMS_TO_TICKS(osk ? 12 : (drew ? 45 : 80)));
+      // Keyboard open: poll touch fast (12ms) so it stays responsive -- an idle frame is cheap (flush is
+      // gated above). Otherwise cap the render rate (~22 fps): a full 1024x600 frame costs a lot of PSRAM
+      // bandwidth and at 60 fps saturates the bus the i386 (core 1) shares, so throttling frees the CPU.
+      vTaskDelay(pdMS_TO_TICKS(osk ? 12 : ((vgaDrew || oskChanged) ? 45 : 80)));
       continue;
     }
 

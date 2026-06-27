@@ -1,3 +1,4 @@
+#if !defined(BOARD_JC4827W543)  // tiny386 is not built for the S3 board (too big; vendored core not wired for the device toolchain)
 /*
  * QEMU Proxy for OPL2/3 emulation by MAME team
  *
@@ -194,3 +195,5 @@ AdlibState *adlib_new()
     return s;
 }
 #endif
+
+#endif // !defined(BOARD_JC4827W543)

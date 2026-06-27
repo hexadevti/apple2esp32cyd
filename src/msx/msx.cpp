@@ -17,6 +17,7 @@
 static uint16_t* msxScratch = nullptr;
 static uint8_t*  g_cartBuf  = nullptr;   // device cartridge image (PSRAM); freed on reload
 static uint8_t*  g_diskBuf  = nullptr;   // mounted .dsk image (PSRAM); freed on remount
+static uint8_t*  g_diskRomBuf = nullptr;  // /roms/msx/diskrom.rom (16K), loaded once on first mount
 static File      g_diskFile;             // persistent r+ handle for SD write-back of dirty sectors
 static bool      g_diskFileOpen = false;
 
@@ -61,7 +62,11 @@ static bool isBiosName(const std::string& nm) {
 
 // ---- SD BIOS discovery + C-BIOS fallback -------------------------------------------------------
 static bool loadBiosFromSD() {
-  const char* names[] = { "/MSXBIOS.ROM", "/msxbios.rom", "/MSX.ROM", "/msx.rom", "/CBIOS_MAIN_MSX1.ROM" };
+  // /roms/msx/ first (the C-BIOS dumped from the old embedded array now lives there), then the
+  // legacy SD-root names for a user-supplied BIOS. There is no embedded fallback any more - the
+  // ROMs live on the card (see msx_cbios.cpp / the roms-to-sd refactor).
+  const char* names[] = { "/roms/msx/cbios.rom", "/roms/msx/msxbios.rom",
+                          "/MSXBIOS.ROM", "/msxbios.rom", "/MSX.ROM", "/msx.rom", "/CBIOS_MAIN_MSX1.ROM" };
   for (const char* nm : names) {
     File f = FSTYPE.open(nm, FILE_READ);
     if (!f) continue;
@@ -70,20 +75,15 @@ static bool loadBiosFromSD() {
       uint8_t* b = msxAllocFast(0x8000);
       if (b) {
         int got = f.read(b, len); f.close();
-        if (got == len) { msx::bios = b; msx::biosLen = len; msx::biosIsCbios = false;
+        if (got == len) { msx::bios = b; msx::biosLen = len;
+                          msx::biosIsCbios = strstr(nm, "cbios") || strstr(nm, "CBIOS");
                           sprintf(buf, "MSX: BIOS %s (%dK)", nm, len / 1024); printLog(buf); return true; }
         free(b);
       } else f.close();
     } else f.close();
   }
-  if (cbiosMainMsx1Len > 0) {                  // embedded main BIOS (flash) fallback
-    msx::bios = (uint8_t*)cbiosMainMsx1; msx::biosLen = (int)cbiosMainMsx1Len; msx::biosIsCbios = true;
-    sprintf(buf, "MSX: using embedded BIOS (%uK)", (unsigned)(cbiosMainMsx1Len / 1024));
-    printLog(buf);
-    return true;
-  }
   msx::biosLen = 0;
-  printLog("MSX: NO BIOS - put MSXBIOS.ROM on SD or embed C-BIOS (see msx_cbios.cpp)");
+  printLog("MSX: NO BIOS - put cbios.rom (32K) in /roms/msx on the SD card");
   return false;
 }
 
@@ -248,8 +248,25 @@ static bool msxLoadCart(const char* path) {
   return true;
 }
 
+// Load the MSX disk-interface ROM from the SD card on first use (cached for the session). The disk
+// ROM used to be embedded; it now lives at /roms/msx/diskrom.rom. Returns false (disk unmountable)
+// if it is missing or the wrong size.
+static bool msxEnsureDiskRom() {
+  if (g_diskRomBuf) return true;
+  File f = FSTYPE.open("/roms/msx/diskrom.rom", FILE_READ);
+  if (!f) { printLog("MSX: /roms/msx/diskrom.rom missing - cannot mount disk"); return false; }
+  if ((int)f.size() != 0x4000) { f.close(); printLog("MSX: diskrom.rom wrong size (want 16K)"); return false; }
+  uint8_t* b = (uint8_t*)ps_malloc(0x4000);
+  if (!b) { f.close(); printLog("MSX: diskrom alloc failed"); return false; }
+  int got = f.read(b, 0x4000); f.close();
+  if (got != 0x4000) { free(b); return false; }
+  g_diskRomBuf = b;
+  return true;
+}
+
 // Mount a .dsk image (read into PSRAM) and install the C-DISK ROM in slot 2 (and remove any cart).
 static bool msxMountDiskImage(const char* path) {
+  if (!msxEnsureDiskRom()) return false;            // need the disk ROM (from SD) before mounting
   File f = FSTYPE.open(path, FILE_READ);
   if (!f) { sprintf(buf, "MSX: cannot open %s", path); printLog(buf); return false; }
   int len = f.size();
@@ -264,7 +281,7 @@ static bool msxMountDiskImage(const char* path) {
   g_diskBuf = db;
   msxCartEject(1);                                  // cart off when a disk is mounted
   if (g_cartBuf) { free(g_cartBuf); g_cartBuf = nullptr; }
-  msx::diskSetRom(msxDiskRom, (int)msxDiskRomLen);  // install the HB3600 disk ROM in slot 2
+  msx::diskSetRom(g_diskRomBuf, 0x4000);            // install the HB3600 disk ROM (from /roms/msx) in slot 2
   msx::diskSetImage(db, len);
   msxDiskClose();                                   // close any previous write-back handle
   g_diskFile = FSTYPE.open(path, "r+");             // random-access read/write (no truncate) for write-back

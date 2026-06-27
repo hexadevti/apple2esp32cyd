@@ -1,3 +1,4 @@
+#if !defined(BOARD_JC4827W543)  // tiny386 is not built for the S3 board (too big; vendored core not wired for the device toolchain)
 /*
  * QEMU DMA emulation
  *
@@ -687,3 +688,5 @@ I8257State *i8257_new(
 //    d->dma_bh = qemu_bh_new(i8257_dma_run, d);
     return d;
 }
+
+#endif // !defined(BOARD_JC4827W543)

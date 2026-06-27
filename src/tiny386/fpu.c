@@ -1,3 +1,4 @@
+#if !defined(BOARD_JC4827W543)  // tiny386 is not built for the S3 board (too big; vendored core not wired for the device toolchain)
 // incomplete x87 emulation, use at your own risk!
 // no exception, no tag word, no float80
 #if defined(USE_AMD64)
@@ -1246,3 +1247,5 @@ bool fpu_exec1(FPU *fpu, void *cpu, int op, int group, unsigned int i)
 #include "simd.inc.h"
 #undef SIMD_fpu_c
 #endif
+
+#endif // !defined(BOARD_JC4827W543)

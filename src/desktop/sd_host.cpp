@@ -1,7 +1,8 @@
 // sd_host.cpp — desktop replacement for src/shared/sd.cpp (excluded on BOARD_DESKTOP).
 //
-// The emulated SD card is a host directory (g_sdRoot). Default ./sdcard, overridable via the
-// EMU_SD_DIR env var. SD-relative paths the cores pass ("/game.rom") are mapped under it by
+// The emulated SD card is a host directory (g_sdRoot). Default = the repo's sdcard/ (absolute, so the
+// ROMs under sdcard/roms/ are found no matter where the .exe is launched from), overridable via the
+// EMU_SD_DIR env var. SD-relative paths the cores pass ("/roms/c64/basic.bin") are mapped under it by
 // sdHostPath(). Also defines the globals that sd.cpp owned on the device (hspi, gBusLock, SD).
 #if defined(BOARD_DESKTOP)
 
@@ -19,8 +20,12 @@ SPIClass          hspi { HSPI };
 SemaphoreHandle_t gBusLock = NULL;
 SDClass           SD;                     // the emulated card (FSTYPE == SD via emu.h)
 
-// SD-card root on the host + relative-path mapper (declared in FS.h).
-std::string g_sdRoot = "./sdcard";
+// SD-card root on the host + relative-path mapper (declared in FS.h). Absolute path to the repo's
+// sdcard/ so /roms/<platform>/*.bin resolve regardless of the working directory; EMU_SD_DIR overrides.
+std::string g_sdRoot = "C:/Users/lucia/repos/emu6502/sdcard";
+
+// The host directory backing the emulated SD card (for the native UI's file browser).
+const char *desktopSdRoot() { return g_sdRoot.c_str(); }
 
 std::string sdHostPath(const char *sdRelative) {
   std::string rel = sdRelative ? sdRelative : "/";

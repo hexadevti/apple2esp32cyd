@@ -11,6 +11,7 @@
 #if defined(BOARD_DESKTOP)
 
 #include "../../emu.h"
+#include "ui_imgui.h"
 #include <SDL.h>
 #include <cstring>
 #include <vector>
@@ -111,30 +112,68 @@ static void desktopScriptInput() {
   }
 }
 
+// Offline keyboard self-test: EMU_DBG_TYPE="HELLO" pushes REAL SDL key events (one char every few
+// frames, after boot) so the full chain is exercised — ImGui ProcessEvent + the WantTextInput gate +
+// usbKeyboardReport — exactly like a user typing. Proves the host keyboard reaches the emulator.
+static SDL_Scancode scancodeForChar(char c) {
+  if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
+  if (c >= 'A' && c <= 'Z') return (SDL_Scancode)(SDL_SCANCODE_A + (c - 'A'));
+  if (c >= '1' && c <= '9') return (SDL_Scancode)(SDL_SCANCODE_1 + (c - '1'));
+  if (c == '0') return SDL_SCANCODE_0;
+  if (c == ' ') return SDL_SCANCODE_SPACE;
+  if (c == '\n') return SDL_SCANCODE_RETURN;
+  return SDL_SCANCODE_UNKNOWN;
+}
+static void desktopTypeInject() {
+  static const char *s = getenv("EMU_DBG_TYPE");
+  if (!s || !*s) return;
+  static long fr = -1; fr++;
+  static long at = []{ const char *e = getenv("EMU_DBG_TYPE_AT"); return e ? atol(e) : 120L; }();
+  static size_t idx = 0; static bool down = false;
+  if (fr < at || (fr % 6) != 0) return;         // wait for boot, then ~1 transition / 6 frames
+  if (!s[idx]) return;
+  SDL_Scancode sc = scancodeForChar(s[idx]);
+  if (sc == SDL_SCANCODE_UNKNOWN) { idx++; return; }
+  SDL_Event e; memset(&e, 0, sizeof(e));
+  e.key.keysym.scancode = sc;
+  e.key.keysym.sym = SDL_GetKeyFromScancode(sc);
+  if (!down) { e.type = SDL_KEYDOWN; e.key.state = SDL_PRESSED;  down = true; }
+  else       { e.type = SDL_KEYUP;   e.key.state = SDL_RELEASED; down = false; idx++; }
+  SDL_PushEvent(&e);
+}
+
 void desktopPumpInput() {
   desktopScriptInput();
+  desktopTypeInject();
   SDL_Event e;
   bool kbChanged = false;
   while (SDL_PollEvent(&e)) {
+    desktopUiProcessEvent(&e);                       // let the ImGui shell see every event first
+    // When ImGui owns the keyboard/mouse (typing in a debug field, dragging a panel), don't also
+    // feed the emulator. Key RELEASES always pass through so a key can't get stuck "pressed".
+    bool uiKb = desktopUiWantCaptureKeyboard();
+    bool uiMouse = desktopUiWantCaptureMouse();
     switch (e.type) {
       case SDL_QUIT:
+        desktopUiSaveState();      // persist window size, panel layout, view prefs, settings + last disk
         running = false;
         SDL_Quit();
         std::exit(0);
         break;
       case SDL_KEYDOWN:
-        if (!e.key.repeat) { pressAdd((uint8_t)e.key.keysym.scancode); kbChanged = true; }
+        if (!e.key.repeat && !uiKb) { pressAdd((uint8_t)e.key.keysym.scancode); kbChanged = true; }
         break;
       case SDL_KEYUP:
         pressRemove((uint8_t)e.key.keysym.scancode);
         kbChanged = true;
         break;
       case SDL_MOUSEMOTION:
-        tft.setMouseState(e.motion.x, e.motion.y, (e.motion.state & SDL_BUTTON_LMASK) != 0);
+        if (!uiMouse) tft.setMouseState(e.motion.x, e.motion.y, (e.motion.state & SDL_BUTTON_LMASK) != 0);
         break;
       case SDL_MOUSEBUTTONDOWN:
       case SDL_MOUSEBUTTONUP:
-        tft.setMouseState(e.button.x, e.button.y, e.button.state == SDL_PRESSED);
+        if (!uiMouse) tft.setMouseState(e.button.x, e.button.y, e.button.state == SDL_PRESSED);
+        else          tft.setMouseState(-1, -1, false);   // release any emulator touch when UI grabs the mouse
         break;
       case SDL_CONTROLLERDEVICEADDED:
         if (!g_pad && SDL_IsGameController(e.cdevice.which)) g_pad = SDL_GameControllerOpen(e.cdevice.which);

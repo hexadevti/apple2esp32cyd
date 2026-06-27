@@ -233,6 +233,7 @@ extern String selectedTiny386FileName; // tiny386: C: hard-disk image (settings 
 extern String selectedTiny386FileNameA; // tiny386: A: floppy image (settings browser marker / auto-mount)
 extern float tiny386MeasuredMhz;     // tiny386: measured i386 throughput (one-time boot benchmark)
 extern float appleMeasuredMhz;       // Apple II: live measured 6502 speed (updated in cpuLoop)
+extern float appleClockMhz;          // Apple II: target clock when throttled (1.0 = stock 1 MHz)
 extern volatile int  g_pcSpkFreq;    // PCXT PC-speaker: PIT ch2 frequency (Hz), read by the audio ISR
 extern volatile bool g_pcSpkOn;      // PCXT PC-speaker: gate+data enabled (port 0x61), read by the audio ISR
 extern bool c64Autoload;          // C64: auto-load selectedC64FileName on boot

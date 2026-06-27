@@ -56,6 +56,20 @@ list(REMOVE_ITEM CORE_SRC
 
 file(GLOB DESKTOP_SRC CONFIGURE_DEPENDS ${REPO}/src/desktop/*.cpp)
 
+# --- Dear ImGui (docking branch) — the desktop-only native UI shell (resizable window, menu bar,
+#     settings dialog, debug panels). Vendored in third_party/imgui, DELIBERATELY OUTSIDE src/ so the
+#     arduino-cli device build (which compiles src/** recursively) never tries to compile these
+#     SDL-dependent files. Only this CMake desktop build references them. ---
+set(IMGUI_DIR ${REPO}/third_party/imgui)
+set(IMGUI_SRC
+  ${IMGUI_DIR}/imgui.cpp
+  ${IMGUI_DIR}/imgui_draw.cpp
+  ${IMGUI_DIR}/imgui_tables.cpp
+  ${IMGUI_DIR}/imgui_widgets.cpp
+  ${IMGUI_DIR}/imgui_demo.cpp
+  ${IMGUI_DIR}/backends/imgui_impl_sdl2.cpp
+  ${IMGUI_DIR}/backends/imgui_impl_sdlrenderer2.cpp)
+
 # tiny386 (Intel i386 PC emulator): vendored C99 core (pc/i386/vga/ide/...) + the C++ glue
 # (tiny386.cpp) + embedded BIOS arrays (tiny386_roms.c). Compiled into the desktop build so the
 # core can be debugged with gdb; the device build compiles the same files via arduino-cli under src/.
@@ -69,7 +83,11 @@ add_executable(emu6502
   ${REPO}/globals.cpp
   ${CORE_SRC}
   ${DESKTOP_SRC}
+  ${IMGUI_SRC}
   ${TINY386_SRC})
+
+# ImGui headers (imgui.h) + its SDL backends. PRIVATE: only the desktop target uses them.
+target_include_directories(emu6502 PRIVATE ${IMGUI_DIR} ${IMGUI_DIR}/backends)
 
 # arduino_shim MUST come first so #include <Arduino.h>/SD.h/EEPROM.h/SPI.h/FS.h/BLEDevice.h and
 # "driver/i2s.h" etc. resolve to the shim instead of the real (absent) libraries.

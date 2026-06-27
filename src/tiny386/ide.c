@@ -1,3 +1,4 @@
+#if !defined(BOARD_JC4827W543)  // tiny386 is not built for the S3 board (too big; vendored core not wired for the device toolchain)
 /*
  * IDE emulation
  * 
@@ -2415,3 +2416,5 @@ void ide_fill_cmos(IDEIFState *s, void *cmos,
     }
     set(cmos, 0x12, d_0x12);
 }
+
+#endif // !defined(BOARD_JC4827W543)

@@ -5,6 +5,7 @@
 #if defined(BOARD_DESKTOP)
 
 #include "display_sdl.h"
+#include "ui_imgui.h"
 #include <SDL.h>
 #include <cstdlib>
 #include <cstring>
@@ -42,16 +43,35 @@ static SDL_Texture   *g_tex    = nullptr;
 static int g_vidTop = 0, g_vidH = H, g_vidLeft = 0, g_vidW = W;
 
 void DisplayGFX::begin() {
+  // Restore the last session's window size (and view prefs / open panels) before creating the window.
+  desktopUiLoadConfig();
+  int cw = 0, ch = 0; desktopUiGetWindowSize(&cw, &ch);
+  if (cw >= 320) g_winW = cw;
+  if (ch >= 240) g_winH = ch;
+  // EMU_W/EMU_H still override (used by the offline-capture harness).
   if (const char *s = getenv("EMU_W")) { int v = atoi(s); if (v >= 320) g_winW = v; }
   if (const char *s = getenv("EMU_H")) { int v = atoi(s); if (v >= 240) g_winH = v; }
   _fb = (uint16_t *)calloc((size_t)W * H, sizeof(uint16_t));
   SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");   // linear filtering (smooth non-integer upscale)
-  g_win = SDL_CreateWindow("emu6502 (desktop debug)", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                           g_winW, g_winH, SDL_WINDOW_SHOWN);
+  g_win = SDL_CreateWindow("emu6502 (desktop)", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+                           g_winW, g_winH, SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
   g_ren = SDL_CreateRenderer(g_win, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
   if (!g_ren) g_ren = SDL_CreateRenderer(g_win, -1, 0);
   g_tex = SDL_CreateTexture(g_ren, SDL_PIXELFORMAT_RGB565, SDL_TEXTUREACCESS_STREAMING, W, H);
   if (!g_win || !g_ren || !g_tex) Serial.printf("DisplayGFX: SDL init failed: %s\n", SDL_GetError());
+  desktopUiInit(g_win, g_ren);   // native ImGui shell shares this window/renderer (presents via flush())
+}
+
+// Expose the active emulator-video content rect (set per frame by displaySetVideoRect/Fill) so the
+// ImGui shell's "Crop borders" view can sample just that sub-rect of the 320x240 framebuffer.
+void desktopGetVideoRect(int *l, int *t, int *w, int *h) {
+  if (l) *l = g_vidLeft; if (t) *t = g_vidTop; if (w) *w = g_vidW; if (h) *h = g_vidH;
+}
+
+// Live SDL window size (for persisting the frame size across sessions).
+void desktopGetCurrentWindowSize(int *w, int *h) {
+  if (g_win) SDL_GetWindowSize(g_win, w, h);
+  else { if (w) *w = g_winW; if (h) *h = g_winH; }
 }
 
 // --- pixel helpers (clipped to 320x240) ---
@@ -210,26 +230,26 @@ void DisplayGFX::flush() {
   desktopPumpInput();                                   // keyboard / gamepad / mouse / SDL_QUIT (before any early-out)
   desktopFrameHook(_fb);                                // headless capture / quit
   if (!g_ren || !g_tex || !_fb) return;
+  // Upload the freshly-rendered 320x240 framebuffer, then hand off to the native ImGui shell, which
+  // draws it (aspect-fit, dockable) plus the menu bar / settings / debug panels and presents. The old
+  // raw RenderCopy path (full-window stretch / SCREEN-FILL crop) is now handled inside the shell
+  // (aspect-fit + the View > "Crop borders" toggle).
   SDL_UpdateTexture(g_tex, nullptr, _fb, W * (int)sizeof(uint16_t));
-  SDL_RenderClear(g_ren);
-  // SCREEN FILL: zoom just the active video content (drop the cores' black borders) to fill the
-  // window. Never in the menu (ORIG so it isn't zoomed). ORIG: the whole 320x240 -> window.
-  if (screenFill && !OptionsWindow && !DebugWindow && g_vidW > 0 && g_vidH > 0) {
-    SDL_Rect src = { g_vidLeft, g_vidTop, g_vidW, g_vidH };
-    SDL_RenderCopy(g_ren, g_tex, &src, nullptr);
-  } else {
-    SDL_RenderCopy(g_ren, g_tex, nullptr, nullptr);     // scale full 320x240 -> window
-  }
-  SDL_RenderPresent(g_ren);
+  desktopUiFrame(g_tex, W, H);
 }
 
-// --- mouse == touch (window pixels -> logical 320x240) ---
+// --- mouse == touch (window pixels -> logical 320x240, via the ImGui shell's image rect) ---
+// Only register a touch when the pointer is over the emulator image; a click on the ImGui chrome
+// (menu bar / debug panels) must NOT poke the emulated screen.
 void DisplayGFX::setMouseState(int winX, int winY, bool down) {
-  _mx = (g_winW > 0) ? (winX * W / g_winW) : 0;
-  _my = (g_winH > 0) ? (winY * H / g_winH) : 0;
-  if (_mx < 0) _mx = 0; else if (_mx > W - 1) _mx = W - 1;
-  if (_my < 0) _my = 0; else if (_my > H - 1) _my = H - 1;
-  _mdown = down;
+  int fx, fy;
+  if (desktopUiMapToEmu(winX, winY, &fx, &fy)) {
+    if (fx < 0) fx = 0; else if (fx > W - 1) fx = W - 1;
+    if (fy < 0) fy = 0; else if (fy > H - 1) fy = H - 1;
+    _mx = fx; _my = fy; _mdown = down;
+  } else {
+    _mdown = false;
+  }
 }
 uint16_t DisplayGFX::getTouchRawZ() { return _mdown ? 1000 : 0; }
 void DisplayGFX::getTouchRaw(uint16_t *x, uint16_t *y) { if (x) *x = (uint16_t)_mx; if (y) *y = (uint16_t)_my; }

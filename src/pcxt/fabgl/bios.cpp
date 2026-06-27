@@ -33,10 +33,20 @@
 using fabgl::i8086;
 
 
-// To compile BIOS execute "cbios.sh"
-static const uint8_t biosrom[] = {
-  #include "biosrom.h"
-};
+// The PC-XT BIOS (8086tiny, GPLv3) used to be embedded here via #include "biosrom.h". It now lives on
+// the SD card at /roms/pcxt/bios.bin and is loaded once into a buffer by ensureBiosLoaded() - read
+// through pcxtReadBiosRom() in pcxt.cpp, which has the Arduino SD API (this fabgl TU does not include
+// emu.h). biosrom/biosromLen are used by BIOS::init (memcpy into guest RAM) + pcBiosFont8x8 (CP437 scan).
+uint8_t *pcxtReadBiosRom(size_t *outLen);   // src/pcxt/pcxt.cpp
+
+static const uint8_t *biosrom    = nullptr;
+static size_t         biosromLen = 0;
+
+static bool ensureBiosLoaded() {
+  if (biosrom) return true;
+  biosrom = pcxtReadBiosRom(&biosromLen);
+  return biosrom != nullptr;
+}
 
 // The 8086tiny BIOS embeds the authentic IBM CP437 8x8 character generator font. Return a pointer to
 // its 256-glyph table (8 bytes/glyph) so the PC-XT text renderer can use the ORIGINAL font instead of
@@ -47,8 +57,9 @@ const uint8_t *pcBiosFont8x8()
   static bool searched = false;
   if (searched) return font;
   searched = true;
+  if (!ensureBiosLoaded()) return nullptr;
   static const uint8_t A[8] = { 0x7C, 0xC6, 0xC6, 0xFE, 0xC6, 0xC6, 0xC6, 0x00 };
-  for (size_t i = 0x41 * 8; i + 256 * 8 <= sizeof(biosrom); i++) {
+  for (size_t i = 0x41 * 8; i + 256 * 8 <= biosromLen; i++) {
     if (memcmp(biosrom + i, A, 8) != 0) continue;
     const uint8_t *s = biosrom + i - 0x41 * 8;
     bool blank = true;
@@ -74,8 +85,8 @@ void BIOS::init(Machine * machine)
   m_mouse     = m_i8042->mouse();
   m_MC146818  = m_machine->getMC146818();
 
-	// copy bios
-  memcpy(m_memory + BIOS_ADDR, biosrom, sizeof(biosrom));
+	// copy bios (from /roms/pcxt/bios.bin; pcxtReadBiosRom already logs if it's missing)
+  if (ensureBiosLoaded()) memcpy(m_memory + BIOS_ADDR, biosrom, biosromLen);
 
   // setup bootstrap code (starting from 0xFFFF0)
   // for example: "JMP FC00:0100"

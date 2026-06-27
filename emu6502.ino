@@ -67,8 +67,8 @@ void setup() {
     joystickSetup();   // analog stick + buttons -> 2600 joystick + console switches
     atariAudioSetup(); // TIA audio -> I2S DAC (GPIO26), LAST so its I2S DMA comes after SD
   } else if (currentPlatform == PLATFORM_IIGS) {
-    iigsSetup();        // alloc banks + embedded ROM 01 + reset 65C816
-    FSSetup();          // SD card (for 5.25" .dsk images)
+    FSSetup();          // SD FIRST: ROM 01 loads from /roms/iigs, plus the 5.25" .dsk / HD images
+    iigsSetup();        // alloc banks + load ROM 01 from SD + reset 65C816
     loadDiskFilesSync();// scan the SD root so the options DISK browser is populated
     loadHdFilesSync();  // ...and the HD browser (.po/.2mg/.hdv)
     if (HdDisk) {       // auto-mount the saved block image -> firmware scan-boots slot 7
@@ -116,6 +116,7 @@ void setup() {
   } else {             // Apple II
     memoryAlloc();
     FSSetup();
+    apple2LoadRoms();  // system ROMs from /roms/apple2 (sets apple2RomLoadFailed -> halt on failure)
     diskSetup();
     HDSetup();
     videoSetup();
@@ -132,7 +133,7 @@ void loop() {
   // core exists today; C64 / NES are selected on the boot splash (video.ino) and
   // will plug in here once implemented.
   switch (currentPlatform) {
-    case PLATFORM_APPLE2: cpuLoop(); break;
+    case PLATFORM_APPLE2: if (apple2RomLoadFailed) { delay(50); break; } cpuLoop(); break;
     case PLATFORM_C64:    c64Loop(); break;
     case PLATFORM_NES:    nesLoop(); break;
     case PLATFORM_ATARI:  atariLoop(); break;

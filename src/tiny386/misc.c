@@ -1,3 +1,4 @@
+#if !defined(BOARD_JC4827W543)  // tiny386 is not built for the S3 board (too big; vendored core not wired for the device toolchain)
 #include "misc.h"
 #include <stdint.h>
 #include <string.h>
@@ -595,3 +596,5 @@ int emulink_data_read_string(void *s, uint8_t *buf, int size, int count)
 	e->status = -1;
 	return count;
 }
+
+#endif // !defined(BOARD_JC4827W543)

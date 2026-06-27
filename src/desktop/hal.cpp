@@ -11,6 +11,8 @@
 
 #include <Arduino.h>
 #include <EEPROM.h>
+#include <SDL.h>          // SDL_GetBasePath: anchor the persistence files next to the .exe
+#include <string>
 
 #include <atomic>
 #include <chrono>
@@ -29,6 +31,18 @@
 
 // Set by main() so ESP.restart() can re-exec this same binary (a true "reboot").
 char **g_emuArgv = nullptr;
+
+// Directory of the running .exe (with trailing slash). All persistence files (eeprom.bin, imgui.ini,
+// emu6502.cfg) are anchored here so the saved session is found no matter what the working directory
+// is when the app is launched. SDL must be initialised first (main() does SDL_Init before setup()).
+const char *desktopBaseDir() {
+  static std::string dir;
+  if (dir.empty()) {
+    if (char *b = SDL_GetBasePath()) { dir = b; SDL_free(b); }
+    else dir = "";   // fall back to cwd-relative
+  }
+  return dir.c_str();
+}
 
 // ---------------------------------------------------------------------------
 // Time base — first call to now() seeds t0; everything is relative to it so the
@@ -174,12 +188,13 @@ void timerAlarmEnable(hw_timer_t *) {}
 EEPROMClass EEPROM;
 namespace {
 std::vector<uint8_t> g_ee;
-const char          *g_eePath = "eeprom.bin";
+std::string          g_eePath;            // resolved to <exe dir>/eeprom.bin on first begin()
 uint8_t              g_eeScratch = 0xFF;
 }
 bool EEPROMClass::begin(size_t size) {
+  if (g_eePath.empty()) g_eePath = std::string(desktopBaseDir()) + "eeprom.bin";
   g_ee.assign(size, 0xFF);
-  FILE *f = fopen(g_eePath, "rb");
+  FILE *f = fopen(g_eePath.c_str(), "rb");
   if (f) {
     fread(g_ee.data(), 1, size, f);   // load whatever fits; rest stays 0xFF
     fclose(f);
@@ -193,7 +208,7 @@ void EEPROMClass::write(int addr, uint8_t val) {
   if (addr >= 0 && (size_t)addr < g_ee.size()) g_ee[addr] = val;
 }
 bool EEPROMClass::commit() {
-  FILE *f = fopen(g_eePath, "wb");
+  FILE *f = fopen(g_eePath.c_str(), "wb");
   if (!f) return false;
   fwrite(g_ee.data(), 1, g_ee.size(), f);
   fclose(f);

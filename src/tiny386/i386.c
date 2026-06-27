@@ -1,3 +1,4 @@
+#if !defined(BOARD_JC4827W543)  // tiny386 is not built for the S3 board (too big; vendored core not wired for the device toolchain)
 #include "i386.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -5312,3 +5313,5 @@ static void cpu_debug(CPUI386 *cpu)
 	cpu->excerr = excerr;
 	nest--;
 }
+
+#endif // !defined(BOARD_JC4827W543)

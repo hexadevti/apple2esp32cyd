@@ -1,3 +1,4 @@
+#if !defined(BOARD_JC4827W543)  // tiny386 is not built for the S3 board (too big; vendored core not wired for the device toolchain)
 /*
  * QEMU PC speaker emulation
  *
@@ -156,3 +157,5 @@ PCSpkState *pcspk_init(PITState *pit)
 //    register_ioport_write(0x61, 1, 1, pcspk_ioport_write, s);
     return s;
 }
+
+#endif // !defined(BOARD_JC4827W543)

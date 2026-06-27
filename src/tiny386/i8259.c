@@ -1,3 +1,4 @@
+#if !defined(BOARD_JC4827W543)  // tiny386 is not built for the S3 board (too big; vendored core not wired for the device toolchain)
 /*
  * QEMU 8259 interrupt controller emulation
  *
@@ -361,3 +362,5 @@ PicState2 *i8259_init(void (*raise_fn)(void *, PicState2 *s), void *obj)
 	s->obj = obj;
 	return s;
 }
+
+#endif // !defined(BOARD_JC4827W543)

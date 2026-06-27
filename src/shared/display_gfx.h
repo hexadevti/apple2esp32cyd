@@ -90,6 +90,10 @@ public:
   // pushes its full-panel image straight to the panel (bypassing the PSRAM canvas + its flush) to
   // halve the per-frame PSRAM traffic -- the canvas write + flush read were the FPS bottleneck.
   void drawPanelRGB565(int32_t x, int32_t y, int32_t w, int32_t h, const uint16_t *data);
+  // Composite + push ONLY the on-screen-keyboard's panel band in one DSI transfer, so a key press
+  // doesn't re-flush the whole 1024x600 frame (the tiny386 OSK was laggy from the full composite).
+  // The caller setBypassCanvas(true) to skip the loop-top full flush. P4 (DSI) only; no-op elsewhere.
+  void flushOskBand();
   void fillPanelBlack();
 
   // --- scanline window writes (Apple II raster path) ---

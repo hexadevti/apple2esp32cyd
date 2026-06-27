@@ -442,6 +442,30 @@ void DisplayGFX::flushDSI() {
   }
   dsiPanelDrawBitmap(0, 0, PANEL_NATIVE_W, PANEL_NATIVE_H, frame);
 }
+
+// Composite + push ONLY the keyboard's band (logical y >= ~100 -> the bottom of the panel) in one DSI
+// transfer. Used by the tiny386 render loop when ONLY the keyboard changed (a key press) so it doesn't
+// re-flush the whole 1024x600 frame -- the full composite made the on-screen keyboard laggy.
+void DisplayGFX::flushOskBand() {
+  if (!_fb || !_oskFb) return;
+  const int y0 = PANEL_NATIVE_H * 100 / DISP_LOGICAL_H;   // keyboard top (logical ~100) -> panel row
+  const int h  = PANEL_NATIVE_H - y0;
+  static uint16_t *band = nullptr;
+  if (!band) band = (uint16_t *)ps_malloc((size_t)PANEL_NATIVE_W * h * 2);
+  if (!band) { flushDSI(); return; }   // fall back to the full flush if the band buffer won't allocate
+  for (int r = 0; r < h; r++) {
+    const uint16_t *vrow = _fb    + (size_t)(y0 + r) * PANEL_NATIVE_W;
+    const uint16_t *orow = _oskFb + (size_t)(y0 + r) * PANEL_NATIVE_W;
+    uint16_t *drow = band + (size_t)r * PANEL_NATIVE_W;
+    for (int x = 0; x < PANEL_NATIVE_W; x++) {
+      uint16_t o = orow[x];
+      drow[x] = (o != OSK_OVERLAY_TRANSPARENT)
+                ? (uint16_t)(((o >> 1) & 0x7BEF) + ((vrow[x] >> 1) & 0x7BEF))   // 50/50 blend
+                : vrow[x];
+    }
+  }
+  dsiPanelDrawBitmap(0, y0, PANEL_NATIVE_W, h, band);
+}
 #endif // BOARD_PANEL_DSI
 
 // Touch (XPT2046 on its own SPI) is read directly in touchkeyboard.cpp; these stay stubs.

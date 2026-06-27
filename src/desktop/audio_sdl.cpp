@@ -12,6 +12,23 @@
 #include "../../emu.h"
 #include <SDL.h>
 
+// ===================== audio tap (read-only, for the ImGui spectrum analyzer) =====================
+// Mirrors each FINAL output sample into a ring AFTER it is written to the SDL buffer — it can never
+// change what's played. The UI grabs the most-recent window for an FFT.
+#define ATAP_N 4096
+static int16_t           g_atap[ATAP_N];
+static volatile uint32_t g_atapW = 0;
+static int               g_atapRate = 44100;
+static inline void audioTap(int16_t s) { g_atap[g_atapW & (ATAP_N - 1)] = s; g_atapW++; }
+int desktopAudioRate() { return g_atapRate; }
+int desktopAudioSnapshot(float *out, int n) {
+  if (n > ATAP_N) n = ATAP_N;
+  uint32_t w = g_atapW;
+  for (int i = 0; i < n; i++)
+    out[i] = (float)g_atap[(w - (uint32_t)n + (uint32_t)i) & (ATAP_N - 1)] / 32768.0f;
+  return n;
+}
+
 // ===================== push model: ampBegin / ampWriteDac8 / ampWriteMono =====================
 static SDL_AudioDeviceID g_ampDev = 0;
 static int               g_ampRate = 44100;
@@ -30,6 +47,7 @@ void ampBegin(int sampleRate) {
   g_ampDev = SDL_OpenAudioDevice(nullptr, 0, &want, &have, 0);
   if (!g_ampDev) { printLog("audio: SDL_OpenAudioDevice failed"); return; }
   g_ampRate = have.freq;
+  g_atapRate = g_ampRate;
   SDL_PauseAudioDevice(g_ampDev, 0);
   printLog("audio: SDL output on");
 }
@@ -50,7 +68,7 @@ void ampWriteDac8(const uint16_t *dacBuf, int n) {
     int chunk = (n - i > 128) ? 128 : (n - i);
     for (int k = 0; k < chunk; k++) {
       int16_t s = (int16_t)((int)dacBuf[i + k] - 32768);   // 0x8000-centered unsigned -> signed
-      st[k * 2] = s; st[k * 2 + 1] = s;
+      st[k * 2] = s; st[k * 2 + 1] = s; audioTap(s);
     }
     ampBackpressure();
     SDL_QueueAudio(g_ampDev, st, chunk * 2 * sizeof(int16_t));
@@ -64,7 +82,7 @@ void ampWriteMono(const int16_t *mono, int n) {
   int i = 0;
   while (i < n) {
     int chunk = (n - i > 128) ? 128 : (n - i);
-    for (int k = 0; k < chunk; k++) { st[k * 2] = mono[i + k]; st[k * 2 + 1] = mono[i + k]; }
+    for (int k = 0; k < chunk; k++) { st[k * 2] = mono[i + k]; st[k * 2 + 1] = mono[i + k]; audioTap(mono[i + k]); }
     ampBackpressure();
     SDL_QueueAudio(g_ampDev, st, chunk * 2 * sizeof(int16_t));
     i += chunk;
@@ -123,7 +141,7 @@ static void speakerCallback(void * /*ud*/, Uint8 *stream, int len) {
     lp += 0.5f * (hp - lp);                             // gentle low-pass
     int v = (int)lp;
     if (v > 32767) v = 32767; else if (v < -32768) v = -32768;
-    out[k * 2] = (int16_t)v; out[k * 2 + 1] = (int16_t)v;
+    out[k * 2] = (int16_t)v; out[k * 2 + 1] = (int16_t)v; audioTap((int16_t)v);
     playUs += dt;
   }
 }
@@ -140,6 +158,7 @@ void speakerSetup() {
   want.callback = speakerCallback;
   g_spkDev = SDL_OpenAudioDevice(nullptr, 0, &want, &have, 0);
   if (!g_spkDev) { printLog("speaker: SDL_OpenAudioDevice failed"); return; }
+  g_atapRate = SPK_FS;
   SDL_PauseAudioDevice(g_spkDev, 0);
   printLog("speaker: SDL 1-bit speaker on");
 }

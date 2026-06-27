@@ -1,3 +1,4 @@
+#if !defined(BOARD_JC4827W543)  // tiny386 is not built for the S3 board (too big; vendored core not wired for the device toolchain)
 /*
  * QEMU NE2000 emulation
  *
@@ -1102,3 +1103,5 @@ NE2000State *isa_ne2000_init(int base, int irq,
 //    qemu_format_nic_info_str(s->vc, s->macaddr);
     return s;
 }
+
+#endif // !defined(BOARD_JC4827W543)

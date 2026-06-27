@@ -1,3 +1,4 @@
+#if !defined(BOARD_JC4827W543)  // tiny386 is not built for the S3 board (too big; vendored core not wired for the device toolchain)
 // tiny386.cpp — emu6502 glue for the vendored tiny386 i386 PC emulator (hchunhui/tiny386, BSD-3).
 //
 // This TU includes emu.h (tft / printLog / dispatch surface) and drives the machine through the
@@ -14,6 +15,25 @@
 #include "tiny386_core.h"
 #include <dirent.h>
 #include <ctype.h>
+
+// Read a whole file from the SD card into a freshly malloc'd buffer (caller frees). load_rom() in
+// tiny386_core.cpp uses this to pull SeaBIOS/VGABIOS from /roms/tiny386 (formerly embedded arrays);
+// that TU can't include emu.h (pc.h's `PC` machine type clashes), so the SD access lives here.
+extern "C" unsigned char* t386_read_sd(const char* sdPath, int* outLen) {
+  *outLen = 0;
+  File f = FSTYPE.open(sdPath, FILE_READ);
+  if (!f) { sprintf(buf, "tiny386: ROM missing: %s", sdPath); printLog(buf); return nullptr; }
+  int len = f.size();
+  if (len <= 0) { f.close(); return nullptr; }
+  unsigned char* b = (unsigned char*)malloc(len);
+  if (!b) { f.close(); printLog("tiny386: ROM alloc failed"); return nullptr; }
+  int rd = 0;
+  while (rd < len) { int n = f.read(b + rd, (len - rd > 8192) ? 8192 : (len - rd)); if (n <= 0) break; rd += n; }
+  f.close();
+  if (rd != len) { free(b); return nullptr; }
+  *outLen = len;
+  return b;
+}
 
 // ----------------------------------------------------------------------------------------------
 // Per-board guest sizing. The P4 (32MB PSRAM) gets a Windows-95-capable machine; the S3 (8MB) a
@@ -79,7 +99,7 @@ static const char *tiny386ResolveImage(const String &sel, const char *desktopEnv
 // ----------------------------------------------------------------------------------------------
 void tiny386Setup()
 {
-  printLog("TINY386 Setup... (Intel i386 + VGA, SeaBIOS embedded)");
+  printLog("TINY386 Setup... (Intel i386 + VGA, SeaBIOS/VGABIOS from /roms/tiny386)");
 
   menuScreen = (unsigned char *)malloc(0x546);
   menuColor  = (unsigned char *)malloc(0x546);
@@ -344,3 +364,5 @@ void loadTiny386FilesSync()
   printLog(buf);
 }
 void tiny386ScanFiles() { loadTiny386FilesSync(); }
+
+#endif // !defined(BOARD_JC4827W543)

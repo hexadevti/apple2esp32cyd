@@ -1,3 +1,4 @@
+#if !defined(BOARD_JC4827W543)  // tiny386 is not built for the S3 board (too big; vendored core not wired for the device toolchain)
 // tiny386_core.cpp — the side of the glue that includes the vendored tiny386 core (pc.h). Kept in a
 // SEPARATE translation unit from tiny386.cpp because pc.h's `PC` machine type collides with the
 // Apple II 6502 program-counter global `PC` declared in proto.h (pulled in by emu.h). This file does
@@ -13,7 +14,6 @@
 
 extern "C" {
 #include "pc.h"
-#include "tiny386_roms.h"
 }
 #include "tiny386_core.h"
 
@@ -41,17 +41,27 @@ extern "C" void *bigmalloc(size_t size)
 #endif
 }
 
-// BIOS/VGABIOS come from the embedded arrays (tiny386_roms.c); the core passes the configured
-// "bios.bin"/"vgabios.bin" names, matched here by substring. addr is where the ROM ends (backward).
+// BIOS/VGABIOS now live on the SD card under /roms/tiny386 (they used to be embedded arrays in
+// tiny386_roms.c). The core passes the configured "bios.bin"/"vgabios.bin" names, matched here by
+// substring; t386_read_sd (tiny386.cpp) pulls the image off the card. addr is where the ROM ends
+// (backward = placed at addr-len).
+extern "C" unsigned char *t386_read_sd(const char *sdPath, int *outLen);
+
 extern "C" int load_rom(void *phys_mem, const char *file, uword addr, int backward)
 {
-  const unsigned char *rom = nullptr;
-  unsigned len = 0;
-  if (file && strstr(file, "vgabios")) { rom = vgabios_rom; len = vgabios_rom_len; }
-  else if (file && strstr(file, "bios")) { rom = seabios_rom; len = seabios_rom_len; }
-  if (rom) {
-    memcpy((uint8_t *)phys_mem + (backward ? addr - len : addr), rom, len);
-    return (int)len;
+  const char *sdPath = nullptr;
+  if (file && strstr(file, "vgabios")) sdPath = "/roms/tiny386/vgabios.bin";
+  else if (file && strstr(file, "bios")) sdPath = "/roms/tiny386/seabios.bin";
+  if (sdPath) {
+    int len = 0;
+    unsigned char *rom = t386_read_sd(sdPath, &len);
+    if (rom && len > 0) {
+      memcpy((uint8_t *)phys_mem + (backward ? addr - len : addr), rom, len);
+      free(rom);
+      return len;
+    }
+    if (rom) free(rom);
+    return 0;
   }
 #if defined(BOARD_DESKTOP)
   if (file) {                        // host-file fallback (e.g. a Linux kernel/initrd)
@@ -171,3 +181,5 @@ int t386_core_mount_hd(void *pc, const char *path)
   PC *p = (PC *)pc;
   return (p->ide && path) ? ide_attach(p->ide, 0, path) : -1;
 }
+
+#endif // !defined(BOARD_JC4827W543)

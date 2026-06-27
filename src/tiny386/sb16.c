@@ -1,3 +1,4 @@
+#if !defined(BOARD_JC4827W543)  // tiny386 is not built for the S3 board (too big; vendored core not wired for the device toolchain)
 /*
  * QEMU Soundblaster 16 emulation
  *
@@ -1598,3 +1599,5 @@ SB16State *sb16_new(
 
     return s;
 }
+
+#endif // !defined(BOARD_JC4827W543)
